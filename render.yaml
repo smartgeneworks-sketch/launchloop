@@ -1,0 +1,39 @@
+# Render Blueprint — New → Blueprint → pick this repo.
+# A persistent disk is required: SQLite lives on it. Disks need a paid instance (Starter or above).
+services:
+  - type: web
+    name: launchloop
+    runtime: docker
+    plan: starter
+    healthCheckPath: /api/health
+    disk:
+      name: launchloop-data
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATA_DIR
+        value: /data
+      - key: APP_API_TOKEN
+        generateValue: true          # copy it from the Render dashboard; the app asks for it on first visit
+      - key: PUBLIC_BASE_URL
+        sync: false                  # e.g. https://launchloop.onrender.com
+      - key: AI_PROVIDER
+        value: auto
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: PUBLISH_MODE
+        value: live
+      - key: SIMULATE_METRICS
+        value: "false"
+      - key: SEED_DEMO
+        value: "false"
+      - key: X_USER_ACCESS_TOKEN
+        sync: false
+      - key: LINKEDIN_ACCESS_TOKEN
+        sync: false
+      - key: LINKEDIN_AUTHOR_URN
+        sync: false

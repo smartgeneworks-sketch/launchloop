@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>LaunchLoop — campaign studio</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='14' fill='%23FF5A1F'/%3E%3Cpath d='M9 16h12M16 10l6 6-6 6' stroke='white' stroke-width='3' fill='none' stroke-linecap='round'/%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand"><span class="brand-mark">↻</span><span>LaunchLoop</span></div>
+      <nav id="nav">
+        <a href="#/" data-route="dashboard"><span class="ico">◎</span>Dashboard</a>
+        <a href="#/workspace" data-route="workspace"><span class="ico">⌂</span>Product source</a>
+        <a href="#/studio" data-route="studio"><span class="ico">✦</span>Creative studio</a>
+        <a href="#/review" data-route="review"><span class="ico">✓</span>Approval queue <span class="nav-count" id="reviewCount"></span></a>
+        <a href="#/timeline" data-route="timeline"><span class="ico">≡</span>Timeline &amp; tasks</a>
+        <a href="#/analytics" data-route="analytics"><span class="ico">↗</span>Analytics &amp; loop</a>
+      </nav>
+      <div class="sidebar-foot" id="modes"></div>
+    </aside>
+    <div class="main">
+      <header class="topbar">
+        <div class="selectors">
+          <label class="sel"><span>Workspace</span><select id="wsSelect"></select></label>
+          <button class="btn ghost sm" data-action="new-workspace">+ Workspace</button>
+          <span class="divider"></span>
+          <label class="sel"><span>Campaign</span><select id="cmpSelect"></select></label>
+          <button class="btn ghost sm" data-action="new-campaign">+ Campaign</button>
+        </div>
+        <div class="top-right">
+          <button class="btn ghost sm" data-action="tick" title="Run the scheduler now instead of waiting for the next interval">Run scheduler now</button>
+        </div>
+      </header>
+      <main id="view" class="view"><div class="loading">Loading…</div></main>
+    </div>
+  </div>
+  <div id="modal-root"></div>
+  <div id="toasts"></div>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

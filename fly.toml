@@ -1,0 +1,38 @@
+# Fly.io — `fly launch --no-deploy --copy-config`, then:
+#   fly volumes create launchloop_data --size 1
+#   fly secrets set APP_API_TOKEN=$(openssl rand -hex 24) PUBLIC_BASE_URL=https://<app>.fly.dev GEMINI_API_KEY=...
+#   fly deploy
+app = "launchloop"
+primary_region = "lhr"
+
+[build]
+
+[env]
+  NODE_ENV = "production"
+  DATA_DIR = "/data"
+  PORT = "3000"
+  PUBLISH_MODE = "live"
+  SIMULATE_METRICS = "false"
+  SEED_DEMO = "false"
+
+[[mounts]]
+  source = "launchloop_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  auto_stop_machines = "off"     # keep the scheduler running
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    grace_period = "10s"
+    interval = "30s"
+    method = "GET"
+    path = "/api/health"
+    timeout = "5s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
