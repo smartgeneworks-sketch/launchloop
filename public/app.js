@@ -121,6 +121,7 @@ async function loadWorkspace(selectCmp) {
   if (!S.wsId) return render();
   localStorage.setItem('ll_ws', S.wsId);
   [S.ws, S.channels, S.campaigns, S.media, S.notif] = await Promise.all([api('GET', `/api/workspaces/${S.wsId}`), api('GET', `/api/workspaces/${S.wsId}/channels`), api('GET', `/api/workspaces/${S.wsId}/campaigns`), api('GET', `/api/workspaces/${S.wsId}/media`), api('GET', `/api/workspaces/${S.wsId}/notifications`).catch(() => null)]);
+  await loadVJobs();
   S.cmpId = selectCmp || (S.campaigns.find((c) => c.id === localStorage.getItem('ll_cmp')) || S.campaigns[0])?.id || null;
   await loadCampaign();
 }
@@ -147,6 +148,7 @@ async function refreshCampaign() {
 }
 async function poll() {
   if (!document.hidden) refreshHealth();
+  if (!document.hidden && vjobsActive()) loadVJobs();
   if (!S.cmpId || document.hidden || $('#modal-root').children.length) return;
   const active = document.activeElement;
   if (active && ['INPUT', 'TEXTAREA', 'SELECT'].includes(active.tagName) && $('#view').contains(active)) return;
@@ -294,8 +296,10 @@ function viewWorkspace() {
       </div>
       <h3 style="margin-top:18px">Media library <span class="muted small">— screenshots & pictures for your demos</span></h3>
       <p class="muted small" style="margin:0 0 8px">Label each image or clip with what it shows (e.g. “upload camera roll photo”, “auto-crop result”, “print sheet 35×45”). Short screen recordings make the most convincing demo scenes. Video scenes automatically pick the image whose label matches the scene, and you can choose exactly which image appears in each scene in the video editor.</p>
-      <div class="media-grid">${(S.media || []).map((m) => `<figure class="media-item">${m.kind === 'video' ? `<div class="media-vid">${m.posterUrl ? `<img src="${esc(m.posterUrl)}" alt="">` : `<video src="${esc(m.url)}#t=0.5" muted preload="metadata"></video>`}<span class="vid-badge">▶ ${m.duration ? m.duration.toFixed(1) + 's' : 'clip'}</span></div>` : `<img src="${esc(m.url)}" alt="" loading="lazy">`}<input type="text" value="${esc(m.label || '')}" placeholder="What does this show?" data-media-label="${esc(m.id)}"><div class="row" style="justify-content:space-between"><span class="muted small">${m.brandKit ? 'brand kit' : esc(Math.round((m.bytes || 0) / 1024) + ' KB')}</span>${m.brandKit ? `<button type="button" class="link small" data-action="remove-shot" data-i="${esc(m.id.split('_').pop())}">remove</button>` : `<button type="button" class="link small" data-action="delete-media" data-id="${esc(m.id)}">delete</button>`}</div></figure>`).join('')}
-        <label class="media-add">+ Upload images or clips<span class="muted small">PNG / JPG · MP4 / MOV screen recordings (keep clips short, under 80 MB)</span><input type="file" accept="image/*,video/mp4,video/quicktime,video/webm" multiple data-upload="media" hidden></label></div>
+      <div class="media-grid">${(S.media || []).map((m) => `<figure class="media-item">${m.kind === 'video' || m.kind === 'final' ? `<div class="media-vid">${m.posterUrl ? `<img src="${esc(m.posterUrl)}" alt="">` : `<video src="${esc(m.url)}#t=0.5" muted preload="metadata"></video>`}<span class="vid-badge">${m.kind === 'final' ? '🎞 finished · ' : '▶ '}${m.duration ? m.duration.toFixed(1) + 's' : 'clip'}</span></div>` : `<img src="${esc(m.url)}" alt="" loading="lazy">`}<input type="text" value="${esc(m.label || '')}" placeholder="What does this show?" data-media-label="${esc(m.id)}"><div class="row" style="justify-content:space-between"><span class="muted small">${m.brandKit ? 'brand kit' : esc(Math.round((m.bytes || 0) / 1024) + ' KB')}</span>${m.brandKit ? `<button type="button" class="link small" data-action="remove-shot" data-i="${esc(m.id.split('_').pop())}">remove</button>` : `<button type="button" class="link small" data-action="delete-media" data-id="${esc(m.id)}">delete</button>`}</div></figure>`).join('')}
+        <label class="media-add">+ Upload images or clips<span class="muted small">PNG / JPG · MP4 / MOV screen recordings (keep clips short, under 80 MB)</span><input type="file" accept="image/*,video/mp4,video/quicktime,video/webm" multiple data-upload="media" hidden></label>
+        <button type="button" class="media-add ai" data-action="ai-clip">✨ Generate AI clip<span class="muted small">Gemini Omni Flash · 3–15 s · for lifestyle & mood shots</span></button></div>
+      ${aiJobsList()}
       <h3 style="margin-top:18px">4 · Audience & locale</h3>
       <div class="form-grid">
         <label class="f">Region / country<select name="region" data-action="region-change">${regionOptions(L.region)}</select></label>
@@ -475,7 +479,7 @@ function resolveSceneMedia(scene, index, library) {
   return { item, fit: scene.media?.fit || 'contain', zoom: scene.media?.zoom ?? item.kind !== 'video', start: Number(scene.media?.start) || 0, auto: true, matched: !!best };
 }
 function mediaSelect(attrs, current, { allowAuto = true, defaultLabel = 'Auto (match by label)', imagesOnly = false } = {}) {
-  const list = (S.media || []).filter((m) => !imagesOnly || m.kind !== 'video');
+  const list = (S.media || []).filter((m) => m.kind !== 'final' && (!imagesOnly || m.kind !== 'video'));
   return `<select ${attrs}>${allowAuto ? `<option value="auto" ${!current || current === 'auto' ? 'selected' : ''}>${defaultLabel}</option>` : ''}<option value="none" ${current === 'none' ? 'selected' : ''}>No image (brand background)</option>${list.map((m) => `<option value="${esc(m.id)}" ${m.id === current ? 'selected' : ''}>${m.kind === 'video' ? '🎬 ' : ''}${esc(m.label || m.name)}</option>`).join('')}</select>`;
 }
 const thumbOf = (m, fit = 'contain') => (m ? `<img src="${esc(m.kind === 'video' ? m.posterUrl || '' : m.url)}" alt="" style="object-fit:${fit}">${m.kind === 'video' ? '<span class="vid-badge sm">▶</span>' : ''}` : '<span>brand<br>background</span>');
@@ -560,6 +564,94 @@ function remindersCard() {
   </form>`;
 }
 
+// ---- AI clips + finished-video uploads
+function aiJobsList() {
+  const jobs = (S.vjobs || []).slice(0, 6);
+  if (!jobs.length) return '';
+  const st = { queued: '⏳ queued', running: '✨ generating…', done: '✅ ready', failed: '⚠ failed' };
+  return `<div class="list small" style="margin-top:10px"><div class="eyebrow">AI clips</div>${jobs.map((j) => `<div class="li"><span class="lvl ${j.status === 'done' ? 'success' : j.status === 'failed' ? 'error' : 'info'}"></span><div class="grow"><b>${st[j.status] || j.status}</b> · ${esc(j.label || j.prompt.slice(0, 60))} <span class="muted">· ${j.duration}s ${esc(j.aspect)} · ${esc(rel(j.created_at))}</span>${j.error ? `<div class="err" style="margin-top:4px">${esc(j.error)}</div>` : ''}</div></div>`).join('')}</div>`;
+}
+async function loadVJobs() {
+  if (!S.wsId) return;
+  const prev = Object.fromEntries((S.vjobs || []).map((j) => [j.id, j.status]));
+  S.vjobs = await api('GET', `/api/workspaces/${S.wsId}/videogen/jobs`).catch(() => S.vjobs || []);
+  let changed = false;
+  for (const j of S.vjobs) {
+    if (prev[j.id] && prev[j.id] !== j.status) {
+      changed = true;
+      if (j.status === 'done') toast(`✨ AI clip ready: ${j.label}${j.asset_id ? ' — added to its scene' : ''}`, 'ok');
+      if (j.status === 'failed') toast(`AI clip failed: ${j.error}`, 'bad');
+    }
+  }
+  if (changed) {
+    S.media = await api('GET', `/api/workspaces/${S.wsId}/media`);
+    if (S.cmpId) await refreshCampaign();
+    if (!$('#modal-root').children.length) render();
+  }
+}
+const vjobsActive = () => (S.vjobs || []).some((j) => j.status === 'queued' || j.status === 'running');
+
+function openAiClip() {
+  const imgs = (S.media || []).filter((m) => m.kind === 'image');
+  openModal(`${modalHead('✨ Generate an AI clip')}
+  <form class="modal-body stack" data-form="ai-clip">
+    <div class="muted small">Gemini Omni Flash creates a short video from your description. Best for <b>hooks, problems and lifestyle moments</b> (people, places, emotions). For your actual product demo, use real screen recordings — AI would invent app screens that aren't yours. Clips are watermarked by Google (SynthID) and imported without sound so your voiceover and music play on top. Generation usually takes a few minutes and uses your Gemini API credits.</div>
+    <label class="f">Describe the clip<textarea name="prompt" rows="4" required placeholder="A young woman in Accra waiting in a long, hot queue outside a photo studio, checking her watch, frustrated. Handheld, warm afternoon light. Single continuous shot. No on-screen text, no dialogue."></textarea></label>
+    <div class="form-grid">
+      <label class="f">Shape<select name="aspect"><option value="9:16">Vertical 9:16 (Reels, TikTok, Status)</option><option value="16:9">Landscape 16:9</option></select></label>
+      <label class="f">Length<select name="duration">${[3, 4, 5, 6, 8, 10, 12, 15].map((n) => `<option value="${n}" ${n === 6 ? 'selected' : ''}>${n} seconds</option>`).join('')}</select></label>
+      <label class="f full">Reference image <span class="hint">optional — e.g. a product photo to bring to life</span><select name="referenceMediaId"><option value="">None</option>${imgs.map((m) => `<option value="${esc(m.id)}">${esc(m.label || m.name)}</option>`).join('')}</select></label>
+    </div>
+    <div class="row"><button class="btn signal">Generate clip</button><button type="button" class="btn ghost" data-action="close">Cancel</button></div>
+  </form>`, { narrow: true });
+}
+
+async function openAiScenes(assetId) {
+  const scenes = await api('GET', `/api/assets/${assetId}/scene-prompts`);
+  openModal(`${modalHead('✨ AI clips for scenes')}
+  <form class="modal-body stack" data-form="ai-scenes" data-id="${assetId}">
+    <div class="muted small">Each selected scene gets its own AI clip, which is placed into the scene automatically when it's ready. Hook, problem and call-to-action scenes are pre-selected; <b>demo and proof scenes are left for your real screen recordings</b> so viewers see the actual product. Edit any prompt before generating.</div>
+    ${scenes.map((sc) => `<div class="card" style="padding:10px 12px"><label class="check"><input type="checkbox" name="scene" value="${sc.index}" ${sc.suggested ? 'checked' : ''}> <b>Scene ${sc.index + 1}</b> <span class="badge b-mute">${esc(sc.type)}</span> <span class="muted small">${sc.start}–${sc.end}s · “${esc(sc.onScreenText)}”</span></label>
+      ${['demo', 'proof'].includes(sc.type) ? '<div class="note" style="margin:6px 0">Tip: use a real screen recording of your product here instead.</div>' : ''}
+      <textarea name="prompt_${sc.index}" rows="3" style="margin-top:6px">${esc(sc.prompt)}</textarea></div>`).join('')}
+    <div class="row"><button class="btn signal">Generate selected clips</button><button type="button" class="btn ghost" data-action="close">Cancel</button></div>
+  </form>`);
+}
+
+function openUploadFinal() {
+  const vid = S.campaign.channels.filter((c) => S.config.channels[c]);
+  openModal(`${modalHead('⬆ Upload a finished video')}
+  <form class="modal-body stack" data-form="upload-final">
+    <div class="muted small">Already made a video (CapCut, Premiere, your phone)? Upload it and LaunchLoop turns it into a creative for each channel you pick — with AI-written captions and tracked links — then it goes through approval, scheduling and the Share Kit like everything else. Sound is kept.</div>
+    <label class="f">Video file <span class="hint">MP4 or MOV, up to 300 MB</span><input type="file" name="file" accept="video/mp4,video/quicktime,video/webm" required></label>
+    <label class="f">Title<input type="text" name="title" required placeholder="PassportBatch in 20 seconds"></label>
+    <label class="f">What's in the video? <span class="hint">helps the AI write accurate captions</span><textarea name="description" rows="3" placeholder="Shows picking a photo from the camera roll, auto-crop to 35×45 mm, and downloading a print sheet."></textarea></label>
+    <div class="f">Post it on<div class="chips" style="margin-top:6px">${vid.map((c) => `<label class="chip-check"><input type="checkbox" name="channels" value="${c}" ${['instagram', 'tiktok', 'youtube_shorts', 'whatsapp_status'].includes(c) ? 'checked' : ''}>${esc(ch(c).label)}</label>`).join('')}</div></div>
+    <label class="check small"><input type="checkbox" name="ai" checked> Write captions with AI for each channel</label>
+    <div class="row"><button class="btn signal">Upload & create creatives</button><button type="button" class="btn ghost" data-action="close">Cancel</button></div>
+  </form>`, { narrow: true });
+}
+function uploadFinal(file, title, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `/api/workspaces/${S.wsId}/media/final?${new URLSearchParams({ name: file.name, label: title })}`);
+    xhr.setRequestHeader('content-type', file.type || 'video/mp4');
+    const tok = localStorage.getItem('ll_token');
+    if (tok) xhr.setRequestHeader('authorization', `Bearer ${tok}`);
+    xhr.upload.onprogress = (e) => e.lengthComputable && onProgress?.(e.loaded / e.total);
+    xhr.upload.onload = () => onProgress?.('processing');
+    xhr.onload = () => {
+      let d = {};
+      try {
+        d = JSON.parse(xhr.responseText);
+      } catch {}
+      xhr.status < 300 ? resolve(d) : reject(new Error(d.error || `Upload failed (${xhr.status})`));
+    };
+    xhr.onerror = () => reject(new Error('Network error during upload'));
+    xhr.send(file);
+  });
+}
+
 const featRow = (f = {}) => `<div class="feat-row"><input type="text" data-feat="name" placeholder="Feature" value="${esc(f.name)}"><input type="text" data-feat="benefit" placeholder="Benefit" value="${esc(f.benefit)}"><button type="button" class="btn ghost sm" data-action="remove-feature">×</button></div>`;
 function channelRow(c) {
   const def = ch(c.channel);
@@ -579,7 +671,7 @@ function viewStudio() {
   <div class="spread"><div><h1 class="page">Creative studio</h1><p class="page-sub">Reels, short videos, flyers, posts and carousels — sized per channel, scored for hook & virality.</p></div>
   ${drafts ? `<button class="btn" data-action="submit-drafts">Submit ${drafts} draft${drafts > 1 ? 's' : ''} for review</button>` : ''}</div>
   <form class="card" data-form="generate" style="margin-bottom:18px">
-    <div class="card-head"><h2>Generate campaign package</h2><span class="muted small">Approved, scheduled and published creatives are never overwritten.</span></div>
+    <div class="card-head"><h2>Generate campaign package</h2><div class="row"><span class="muted small">Approved, scheduled and published creatives are never overwritten.</span><button type="button" class="btn ghost sm" data-action="upload-final">⬆ Upload a finished video</button></div></div>
     <div class="stack" style="gap:10px">
       <div class="row"><span class="eyebrow" style="width:70px">Channels</span><div class="chips">${S.campaign.channels.map((c) => `<label class="chip-check"><input type="checkbox" name="channels" value="${c}" checked>${esc(ch(c).label)}</label>`).join('')}</div></div>
       <div class="row"><span class="eyebrow" style="width:70px">Formats</span><div class="chips">${['reel', 'video', 'flyer', 'post', 'carousel'].map((f) => `<label class="chip-check"><input type="checkbox" name="formats" value="${f}" checked>${fmtLabel(f)}</label>`).join('')}</div></div>
@@ -843,7 +935,9 @@ async function openAsset(assetId, slide = 0) {
   if (a.state === 'FAILED') trLabel.NEEDS_REVIEW = 'Back to review';
   let formatFields = '';
   if (a.format === 'reel' || a.format === 'video') {
-    formatFields = `<h3 style="margin-top:14px">Script & storyboard <span class="muted small">${c.durationSec}s · ${esc(c.musicMood || '')}</span></h3>
+    formatFields = c.uploaded
+      ? `<div class="callout info small" style="margin-top:10px"><div>🎞 <b>Uploaded finished video</b>${c.durationSec ? ` · ${c.durationSec}s` : ''} · ${esc(a.aspect_ratio)}. LaunchLoop posts it as-is (with its own sound); edit the caption here.${c.description ? `<br><span class="muted">About: ${esc(c.description)}</span>` : ''}</div></div>`
+      : `<div class="spread" style="margin-top:14px"><h3 style="margin:0">Script & storyboard <span class="muted small">${c.durationSec}s · ${esc(c.musicMood || '')}</span></h3>${locked ? '' : `<button type="button" class="btn ghost sm" data-action="ai-scenes" data-id="${a.id}">✨ AI clips for scenes</button>`}</div>
       <p class="muted small" style="margin:0 0 6px">Choose exactly which screenshot or picture appears in each scene. Upload more in <b>Product source → Media library</b>, or right here.</p>
       <div class="card" style="padding:10px 14px">${(c.storyboard || []).map((s, i) => {
         const r = resolveSceneMedia(s, i, S.media || []);
@@ -867,10 +961,11 @@ async function openAsset(assetId, slide = 0) {
   const slides = a.format === 'carousel' ? c.slides?.length || 0 : 0;
   openModal(`${modalHead(esc(a.title), badge(a.state) + scorePill(sc))}
   <div class="modal-body"><div class="editor">
-    <div><div class="pv"><img src="${mediaUrl(a, slide)}" alt="preview"></div>
+    <div><div class="pv">${c.uploaded ? `<video src="/api/media/${esc(c.mediaId)}" controls playsinline preload="metadata" style="max-width:100%;max-height:520px;border-radius:8px"></video>` : `<img src="${mediaUrl(a, slide)}" alt="preview">`}</div>
       ${slides ? `<div class="row" style="justify-content:center;margin-top:8px">${Array.from({ length: slides }, (_, i) => `<button class="chip ${i === slide ? 'on' : ''}" data-action="slide" data-id="${a.id}" data-i="${i}">${i + 1}</button>`).join('')}</div>` : ''}
-      <div class="row" style="justify-content:center;margin-top:10px"><a class="btn ghost sm" href="${mediaUrl(a, slide)}" download="${a.channel}-${a.format}.svg">Download SVG</a><button class="btn ghost sm" data-action="png" data-src="${mediaUrl(a, slide)}" data-name="${a.channel}-${a.format}-${slide + 1}.png">Download PNG</button><button class="btn signal sm" data-action="share-kit" data-id="${a.id}">Share Kit</button></div>
-      ${a.format === 'reel' || a.format === 'video' ? `<div class="row" style="justify-content:center;margin-top:8px"><button class="btn sm" data-action="record-video" data-id="${a.id}">🎬 Download video (${c.durationSec || ''}s)</button></div><p class="muted small" style="text-align:center;margin:6px 0 0">With AI voiceover, music and burned-in captions. Records in real time — keep this tab open.</p>` : ''}
+      <div class="row" style="justify-content:center;margin-top:10px">${c.uploaded ? '' : `<a class="btn ghost sm" href="${mediaUrl(a, slide)}" download="${a.channel}-${a.format}.svg">Download SVG</a><button class="btn ghost sm" data-action="png" data-src="${mediaUrl(a, slide)}" data-name="${a.channel}-${a.format}-${slide + 1}.png">Download PNG</button>`}<button class="btn signal sm" data-action="share-kit" data-id="${a.id}">Share Kit</button></div>
+      ${c.uploaded ? `<div class="row" style="justify-content:center;margin-top:8px"><a class="btn sm" href="/api/media/${esc(c.mediaId)}?download=1">⬇ Download video (MP4)</a></div>` : ''}
+      ${(a.format === 'reel' || a.format === 'video') && !c.uploaded ? `<div class="row" style="justify-content:center;margin-top:8px"><button class="btn sm" data-action="record-video" data-id="${a.id}">🎬 Download video (${c.durationSec || ''}s)</button></div><p class="muted small" style="text-align:center;margin:6px 0 0">With AI voiceover, music and burned-in captions. Records in real time — keep this tab open.</p>` : ''}
       <div class="card" style="margin-top:14px"><div class="card-head" style="margin-bottom:8px"><h3 style="margin:0">Hook & virality advisor</h3><button class="link small" data-action="rescore" data-id="${a.id}">Re-score</button></div>
         ${Object.entries({ hook: 'Hook clarity', showDontTell: 'Show-don’t-tell', shareability: 'Shareability', cta: 'CTA & link' }).map(([k, l]) => `<div class="dim"><span>${l}</span><div class="bar ${sc.dims?.[k] >= 70 ? 'ok' : 'signal'}"><i style="width:${sc.dims?.[k] || 0}%"></i></div><span class="mono">${sc.dims?.[k] ?? '–'}</span></div>`).join('')}
         <div style="margin:8px 0">${(sc.tags || []).map((t) => `<span class="tag">${esc(t)}</span>`).join('')}</div>
@@ -889,7 +984,7 @@ async function openAsset(assetId, slide = 0) {
       <div class="f"><span>Tracked link</span><div class="copybox"><input type="text" readonly value="${esc(a.utm_url || '')}"><button type="button" class="btn ghost sm" data-copy="${esc(a.utm_url || '')}">Copy</button></div></div>
       <div class="spread" style="margin-top:6px">
         <div class="row">${!locked ? '<button class="btn">Save changes</button>' : ''}${transitions.map((s) => `<button type="button" class="btn ${s === 'APPROVED' && a.state !== 'SCHEDULED' ? 'ok' : 'ghost'} sm" data-action="${s === 'NEEDS_REVISION' ? 'request-changes' : 'transition'}" data-to="${s}" data-id="${a.id}">${trLabel[s] || s}</button>`).join('')}</div>
-        <div class="row"><input type="text" id="regenInstr" placeholder="Direction for regeneration (optional)" style="width:220px"><button type="button" class="btn ghost sm" data-action="regenerate" data-id="${a.id}" data-modal="1">↻ ${['APPROVED', 'SCHEDULED', 'FAILED', 'PUBLISHED'].includes(a.state) ? 'New variant' : 'Regenerate'}</button></div>
+        <div class="row"><input type="text" id="regenInstr" placeholder="Direction for regeneration (optional)" style="width:220px"><button type="button" class="btn ghost sm" data-action="regenerate" data-id="${a.id}" data-modal="1">↻ ${c.uploaded ? 'Rewrite caption' : ['APPROVED', 'SCHEDULED', 'FAILED', 'PUBLISHED'].includes(a.state) ? 'New variant' : 'Regenerate'}</button></div>
       </div>
       <details><summary class="link small">History (${a.events.length} events${a.jobs.length ? `, ${a.jobs.length} jobs` : ''})</summary>
         <div class="list small" style="margin-top:6px">${a.events.map((e) => `<div class="li"><span class="mono">${fmtDate(e.at, { time: true })}</span><div class="grow">${e.from_state ? `${badge(e.from_state)} → ` : ''}${badge(e.to_state)} <span class="muted">by ${esc(e.actor)}${e.note ? ' — ' + esc(e.note) : ''}</span></div></div>`).join('')}
@@ -910,7 +1005,7 @@ async function openShareKit(assetId) {
   openModal(`${modalHead(`Share Kit · ${esc(k.channelLabel)}`, `<span class="badge ${k.mode === 'api' ? 'b-api' : 'b-kit'}">${k.mode === 'api' ? 'API channel' : 'manual channel'}</span>`)}
   <div class="modal-body stack">
     <div class="muted small">${esc(k.requirements)}</div>
-    <div><div class="eyebrow">1 · Media (pre-sized ${esc(k.media[0]?.aspect)})</div><div class="kit-media">${k.media.map((m, i) => `<figure><img src="${m.svg}" alt=""><div class="row" style="justify-content:space-between"><span class="small">${esc(m.label)}</span><span class="row" style="gap:4px"><a class="btn ghost xs" href="${m.svg}" download="${k.channel}-${i + 1}.svg">SVG</a><button class="btn ghost xs" data-action="png" data-src="${m.svg}" data-name="${k.channel}-${i + 1}.png">PNG</button></span></div></figure>`).join('')}</div>
+    <div><div class="eyebrow">1 · Media (pre-sized ${esc(k.media[0]?.aspect)})</div><div class="kit-media">${k.media.map((m, i) => `<figure><img src="${m.svg}" alt=""><div class="row" style="justify-content:space-between"><span class="small">${esc(m.label)}</span><span class="row" style="gap:4px">${m.download ? `<a class="btn xs" href="${m.download}">⬇ MP4</a>` : `<a class="btn ghost xs" href="${m.svg}" download="${k.channel}-${i + 1}.svg">SVG</a><button class="btn ghost xs" data-action="png" data-src="${m.svg}" data-name="${k.channel}-${i + 1}.png">PNG</button>`}</span></div></figure>`).join('')}</div>
       ${k.renderJob ? `<div class="row small" style="margin-top:6px"><button class="btn sm" data-action="record-video" data-id="${k.assetId}">🎬 Download video</button><button class="link" data-action="render-job" data-id="${k.assetId}">Video render job (JSON)</button><span class="muted">— render to MP4, or film it following the storyboard.</span></div>` : ''}</div>
     <div><div class="spread"><div class="eyebrow">2 · Caption</div><span class="counter ${k.overLimit ? 'over' : ''}">${k.captionLength} / ${k.captionLimit}</span></div><textarea rows="7" readonly id="kitCaption">${esc(k.caption)}</textarea><div class="row" style="margin-top:6px"><button class="btn sm" data-copy-el="kitCaption">Copy caption</button></div></div>
     <div><div class="eyebrow">3 · Tracked link</div><div class="copybox"><input type="text" readonly value="${esc(k.link)}"><button class="btn ghost sm" data-copy="${esc(k.link)}">Copy</button></div></div>
@@ -1041,6 +1136,15 @@ const actions = {
     localStorage.setItem('ll_theme', el.dataset.v);
     history.replaceState(null, '', location.pathname + location.hash);
     location.reload();
+  },
+  'ai-clip'() {
+    openAiClip();
+  },
+  'ai-scenes'(el) {
+    openAiScenes(el.dataset.id).catch((e) => toast(e.message, 'bad'));
+  },
+  'upload-final'() {
+    openUploadFinal();
   },
   'auto-schedule'() {
     openAutoSchedule().catch((e) => toast(e.message, 'bad'));
@@ -1308,6 +1412,47 @@ const forms = {
     const updated = await busy(btn, () => api('PATCH', `/api/assets/${a.id}`, { headline: fd.get('headline'), caption: fd.get('caption'), cta: fd.get('cta'), hashtags: fd.get('hashtags'), content }));
     toast(updated.state !== a.state ? `Saved — moved to ${STATE_LABEL[updated.state]} for re-approval` : 'Saved', 'ok');
     await afterAssetChange(a.id);
+  },
+  async 'ai-clip'(f, fd, btn) {
+    const body = { prompt: fd.get('prompt'), aspect: fd.get('aspect'), duration: Number(fd.get('duration')), referenceMediaId: fd.get('referenceMediaId') || null };
+    await busy(btn, () => api('POST', `/api/workspaces/${S.wsId}/videogen`, body));
+    closeModal();
+    toast('✨ Generating your clip — usually a few minutes. It will appear in the Media library.', 'ok');
+    await loadVJobs();
+    render();
+  },
+  async 'ai-scenes'(f, fd, btn) {
+    const scenes = fd.getAll('scene').map(Number);
+    if (!scenes.length) return toast('Select at least one scene', 'bad');
+    const prompts = Object.fromEntries(scenes.map((i) => [i, fd.get(`prompt_${i}`)]));
+    const jobs = await busy(btn, () => api('POST', `/api/assets/${f.dataset.id}/videogen-scenes`, { scenes, prompts }));
+    closeModal();
+    toast(`✨ Generating ${jobs.length} clip(s) — usually a few minutes. Each is added to its scene when ready.`, 'ok');
+    await loadVJobs();
+  },
+  async 'upload-final'(f, fd, btn) {
+    const file = fd.get('file');
+    const channels = fd.getAll('channels');
+    if (!file?.size) return toast('Choose a video file', 'bad');
+    if (!channels.length) return toast('Pick at least one channel', 'bad');
+    btn.classList.add('busy');
+    const label = btn.textContent;
+    try {
+      const m = await uploadFinal(file, fd.get('title'), (p) => (btn.textContent = p === 'processing' ? 'Processing video…' : `Uploading ${Math.round(p * 100)}%`));
+      btn.textContent = 'Writing captions…';
+      const r = await api('POST', `/api/campaigns/${S.cmpId}/assets/from-upload`, { mediaId: m.id, channels, title: fd.get('title'), description: fd.get('description'), aiCaptions: !!fd.get('ai') });
+      closeModal();
+      toast(`Created ${r.created.length} creative(s) from your video (${r.aspect}) — review them in the Studio`, 'ok');
+      S.media = await api('GET', `/api/workspaces/${S.wsId}/media`);
+      await refreshCampaign();
+      S.ui.studioState = 'DRAFT';
+      render();
+    } catch (e) {
+      toast(e.message, 'bad');
+    } finally {
+      btn.classList.remove('busy');
+      btn.textContent = label;
+    }
   },
   async notifications(f, fd, btn, { silent = false } = {}) {
     const body = {

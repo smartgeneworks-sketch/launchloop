@@ -231,7 +231,21 @@ export function renderVideoPreviewSvg(asset, workspace, { library = [], images =
   <rect x="0" y="${H - 10}" width="0" height="10" fill="${t.accent}"><animate attributeName="width" from="0" to="${W}" dur="${D}s" repeatCount="indefinite"/></rect></svg>`;
 }
 
+/** Preview for an uploaded finished video: its poster frame with a play badge. */
+function renderUploadedSvg(asset, workspace, images) {
+  const t = theme(workspace);
+  const [W, H] = size(asset.aspect_ratio);
+  const poster = images[asset.content.mediaId];
+  const r = Math.min(W, H) * 0.09;
+  const dur = asset.content.durationSec ? `${asset.content.durationSec}s` : 'video';
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}"><rect width="${W}" height="${H}" fill="#0b0d12"/>
+    ${poster ? `<image href="${x(poster)}" width="${W}" height="${H}" preserveAspectRatio="xMidYMid meet"/>` : `<text x="${W / 2}" y="${H / 2 + r * 1.6}" text-anchor="middle" font-family="${x(t.body)}" font-size="${r * 0.45}" fill="#fff" opacity=".8">${x(asset.title)}</text>`}
+    <circle cx="${W / 2}" cy="${H / 2}" r="${r}" fill="#000" fill-opacity=".55"/><path d="M${W / 2 - r * 0.32} ${H / 2 - r * 0.45} L${W / 2 + r * 0.5} ${H / 2} L${W / 2 - r * 0.32} ${H / 2 + r * 0.45}Z" fill="#fff"/>
+    <rect x="${W - r * 2.6}" y="${r * 0.6}" width="${r * 2}" height="${r * 0.8}" rx="${r * 0.4}" fill="#000" fill-opacity=".65"/><text x="${W - r * 1.6}" y="${r * 1.15}" text-anchor="middle" font-family="${x(t.body)}" font-size="${r * 0.42}" font-weight="700" fill="#fff">${x(dur)}</text></svg>`;
+}
+
 export function renderAssetSvg(rawAsset, workspace, { slide = 0, fontCss = '', library = [], images = {} } = {}) {
+  if (rawAsset.content?.uploaded) return renderUploadedSvg(rawAsset, workspace, images);
   const asset = { ...rawAsset, headline: String(rawAsset.headline || '').replace(/\s*\{\{\s*link\s*\}\}\s*/gi, ' ').trim(), content: stripLinkTokens(rawAsset.content || {}) };
   let svg;
   if (asset.format === 'reel' || asset.format === 'video') svg = renderVideoPreviewSvg(asset, workspace, { library, images });

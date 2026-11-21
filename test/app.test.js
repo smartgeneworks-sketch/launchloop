@@ -12,6 +12,7 @@ import { buildUtmUrl, parseUtmContent, utmContentFor } from '../src/services/utm
 import { seed } from '../src/seed.js';
 import { createWorker } from '../src/worker.js';
 import { start } from '../src/server.js';
+import { execFileSync as execFileSyncTop } from 'node:child_process';
 import { Notifier } from '../src/services/notify.js';
 import { planSchedule, applySchedule, bulkTransition, zonedToUtc } from '../src/services/scheduling.js';
 
@@ -383,5 +384,80 @@ describe('video clips in the media library', () => {
     assert.equal(r.item.kind, 'video');
     assert.equal(r.start, 0.5);
     assert.equal(r.zoom, false);
+  });
+});
+
+describe('AI motion clips + uploaded finished videos', () => {
+  const haveFfmpeg = () => {
+    try {
+      execFileSyncTop('ffmpeg', ['-version'], { stdio: 'ignore' });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  test('AI clip job stores the video and places it in the scene', async () => {
+    if (!haveFfmpeg()) return;
+    const fs = await import('node:fs');
+    const os = await import('node:os');
+    const path = await import('node:path');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'llg-'));
+    const mp4 = path.join(dir, 'g.mp4');
+    execFileSyncTop('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc=size=360x640:rate=24:duration=3', '-f', 'lavfi', '-i', 'sine=d=3', '-shortest', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', mp4]);
+    const b64 = fs.readFileSync(mp4).toString('base64');
+    const { VideoGen } = await import('../src/services/videogen.js');
+    const { ctx, campaign } = await setup();
+    let sent;
+    const vg = new VideoGen({
+      db: ctx.db,
+      config: { ...ctx.config, dataDir: dir, env: { GEMINI_API_KEY: 'k' } },
+      fetchImpl: async (url, o) => ((sent = JSON.parse(o.body)), new Response(JSON.stringify({ status: 'completed', steps: [{ type: 'model_output', content: [{ type: 'video', mime_type: 'video/mp4', data: b64 }] }] }))),
+    });
+    let reel = ctx.db.get('creative_assets', `SELECT * FROM creative_assets WHERE campaign_id = ? AND channel = 'youtube_shorts' AND format = 'reel'`, campaign.id);
+    reel = core.transitionAsset(ctx, reel.id, 'NEEDS_REVIEW', { note: 'add AI clips' });
+    const ws = ctx.db.byId('workspaces', campaign.workspace_id);
+    const [job] = vg.forScenes(reel, ws, { scenes: [0] });
+    for (let i = 0; i < 100 && ctx.db.byId('ai_video_jobs', job.id).status !== 'done'; i++) await new Promise((r) => setTimeout(r, 100));
+    const done = ctx.db.byId('ai_video_jobs', job.id);
+    assert.equal(done.status, 'done', done.error);
+    assert.equal(sent.model, 'gemini-omni-1.2-flash');
+    assert.equal(sent.response_format.aspect_ratio, '9:16');
+    assert.match(typeof sent.input === 'string' ? sent.input : '', /No on-screen text/);
+    const after = ctx.db.byId('creative_assets', reel.id);
+    assert.equal(after.content.storyboard[0].media.id, done.media_id);
+  });
+
+  test('finished video keeps its audio and becomes one draft per channel', async () => {
+    if (!haveFfmpeg()) return;
+    const fs = await import('node:fs');
+    const os = await import('node:os');
+    const path = await import('node:path');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'llf-'));
+    const src = path.join(dir, 'final.mov');
+    execFileSyncTop('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc=size=540x960:rate=30:duration=4', '-f', 'lavfi', '-i', 'sine=frequency=440:d=4', '-shortest', '-c:v', 'mpeg4', '-c:a', 'pcm_s16le', src]);
+    const { addFinalVideo } = await import('../src/services/library.js');
+    const { ctx, campaign } = await setup();
+    const ws = ctx.db.byId('workspaces', campaign.workspace_id);
+    const tmp = path.join(dir, 'upload.tmp');
+    fs.copyFileSync(src, tmp);
+    const m = await addFinalVideo(ctx.db, ws, { tmpPath: tmp, mime: 'video/quicktime', name: 'final.mov', label: 'Launch video', dataDir: dir });
+    assert.equal(m.kind, 'final');
+    const codecs = execFileSyncTop('ffprobe', ['-v', 'error', '-show_entries', 'stream=codec_name', '-of', 'csv=p=0', path.join(dir, 'media', `${m.id}.mp4`)]).toString();
+    assert.match(codecs, /h264/);
+    assert.match(codecs, /aac/, 'audio kept');
+    const r = await core.createAssetsFromUpload(ctx, campaign.id, { mediaId: m.id, channels: ['instagram', 'tiktok', 'whatsapp_status'], title: 'Launch video', description: 'Shows the auto-crop' });
+    assert.equal(r.created.length, 3);
+    assert.equal(r.format, 'reel');
+    const a = ctx.db.byId('creative_assets', r.created[0]);
+    assert.equal(a.content.uploaded, true);
+    assert.match(a.utm_url, /utm_content=reel-/);
+    // package regeneration must not overwrite uploaded drafts
+    await core.generatePackage(ctx, campaign.id, { channels: ['instagram'], formats: ['reel'] });
+    assert.equal(ctx.db.byId('creative_assets', a.id).content.uploaded, true);
+    // regenerate rewrites the caption only
+    const rg = await core.regenerateAsset(ctx, a.id);
+    assert.equal(rg.asset.content.uploaded, true);
+    assert.equal(rg.asset.content.mediaId, m.id);
   });
 });

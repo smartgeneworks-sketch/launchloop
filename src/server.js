@@ -18,7 +18,8 @@ import { Publisher } from './services/publisher.js';
 import { scoreAsset } from './services/scorer.js';
 import { TTSService, assetVoiceover } from './services/tts.js';
 import { FontService } from './services/fonts.js';
-import { addMedia, addVideo, deleteMedia, getMedia, listMedia, mediaDataUrl, resolveSceneMedia } from './services/library.js';
+import { addFinalVideo, addMedia, addVideo, deleteMedia, getMedia, listMedia, mediaDataUrl, resolveSceneMedia } from './services/library.js';
+import { VideoGen, scenePrompt } from './services/videogen.js';
 import { FONTS, PAIRINGS } from './lib/fonts.js';
 import { Notifier } from './services/notify.js';
 import { SUGGESTED_TIMES, WEEKDAY_ONLY, applySchedule, bulkTransition, planSchedule } from './services/scheduling.js';
@@ -31,7 +32,7 @@ const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.json': 'application/json' };
 const MAX_BODY = 6 * 1024 * 1024;
 
-export function createApp({ db, ai, config, publisher, worker, tts = new TTSService(config.env, { dataDir: config.dataDir }), fonts = new FontService({ dataDir: config.dataDir }), notifier = new Notifier({ db, config }) }) {
+export function createApp({ db, ai, config, publisher, worker, tts = new TTSService(config.env, { dataDir: config.dataDir }), fonts = new FontService({ dataDir: config.dataDir }), notifier = new Notifier({ db, config }), videogen = new VideoGen({ db, config }) }) {
   const ctx = { db, ai, config };
   const routes = [];
   const on = (method, pattern, handler, opts = {}) => {
@@ -161,7 +162,8 @@ export function createApp({ db, ai, config, publisher, worker, tts = new TTSServ
   async function prepareRender(a, ws) {
     const library = listMedia(db, ws);
     const ids = new Set();
-    if (a.format === 'reel' || a.format === 'video') (a.content?.storyboard || []).forEach((s, i) => { const r = resolveSceneMedia(s, i, library); if (r) ids.add(r.item.id); });
+    if (a.content?.uploaded) ids.add(a.content.mediaId);
+    else if (a.format === 'reel' || a.format === 'video') (a.content?.storyboard || []).forEach((s, i) => { const r = resolveSceneMedia(s, i, library); if (r) ids.add(r.item.id); });
     else if (a.content?.media?.id && a.content.media.id !== 'none') ids.add(a.content.media.id);
     const images = {};
     for (const mid of ids) images[mid] = mediaDataUrl(db, mid);
@@ -194,8 +196,9 @@ export function createApp({ db, ai, config, publisher, worker, tts = new TTSServ
     res.writeHead(200, { 'content-type': 'image/jpeg', 'cache-control': 'public, max-age=86400' });
     fs.createReadStream(m.poster).pipe(res);
   }, { raw: true, public: true });
-  on('GET', '/api/media/:id', ({ p, req, res }) => {
+  on('GET', '/api/media/:id', ({ p, q, req, res }) => {
     const m = getMedia(db, p.id);
+    if (q.download && m?.path) res.setHeader('content-disposition', `attachment; filename="${p.id}.mp4"`);
     if (!m) throw new HttpError(404, 'Media not found');
     if (!m.path) {
       res.writeHead(200, { 'content-type': m.mime, 'cache-control': 'public, max-age=86400' });
@@ -223,6 +226,50 @@ export function createApp({ db, ai, config, publisher, worker, tts = new TTSServ
     res.writeHead(200, { 'content-type': 'text/css; charset=utf-8', 'cache-control': 'no-cache' });
     res.end(css);
   }, { raw: true, public: true });
+
+  // ---------------------------------------------------------------- AI motion clips
+  on('GET', '/api/videogen', () => videogen.info());
+  on('GET', '/api/workspaces/:id/videogen/jobs', ({ p }) => videogen.jobs(must(db.byId('workspaces', p.id), 'Workspace')));
+  on('POST', '/api/workspaces/:id/videogen', ({ p, body }) => videogen.create(must(db.byId('workspaces', p.id), 'Workspace'), body));
+  on('GET', '/api/assets/:id/scene-prompts', ({ p }) => {
+    const a = must(db.byId('creative_assets', p.id), 'Asset');
+    const ws = db.get('workspaces', 'SELECT w.* FROM workspaces w JOIN campaigns c ON c.workspace_id = w.id WHERE c.id = ?', a.campaign_id);
+    const aspect = a.aspect_ratio === '9:16' ? '9:16' : '16:9';
+    return (a.content?.storyboard || []).map((s, i) => ({ index: i, type: s.type, start: s.start, end: s.end, onScreenText: s.onScreenText, prompt: scenePrompt(s, ws, aspect), suggested: ['hook', 'problem', 'cta'].includes(s.type) }));
+  });
+  on('POST', '/api/assets/:id/videogen-scenes', ({ p, body }) => {
+    const a = must(db.byId('creative_assets', p.id), 'Asset');
+    if (!['DRAFT', 'NEEDS_REVISION', 'NEEDS_REVIEW'].includes(a.state)) throw new HttpError(409, 'Send this creative back to draft or review before adding AI clips');
+    const ws = db.get('workspaces', 'SELECT w.* FROM workspaces w JOIN campaigns c ON c.workspace_id = w.id WHERE c.id = ?', a.campaign_id);
+    return videogen.forScenes(a, ws, body);
+  });
+
+  // ---------------------------------------------------------------- uploaded finished videos
+  on('POST', '/api/workspaces/:id/media/final', async ({ p, q, req, headers }) => {
+    const ws = must(db.byId('workspaces', p.id), 'Workspace');
+    const max = 300 * 1024 * 1024;
+    if (Number(headers['content-length'] || 0) > max) throw new HttpError(413, 'Videos must be under 300 MB');
+    const tmp = path.join(os.tmpdir(), `ll-up-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    await new Promise((resolve, reject) => {
+      let size = 0;
+      const out = fs.createWriteStream(tmp);
+      req.on('data', (c) => {
+        size += c.length;
+        if (size > max) {
+          req.destroy();
+          out.destroy();
+          fs.rmSync(tmp, { force: true });
+          reject(new HttpError(413, 'Videos must be under 300 MB'));
+        }
+      });
+      req.pipe(out);
+      out.on('finish', resolve);
+      out.on('error', reject);
+      req.on('error', reject);
+    });
+    return addFinalVideo(db, ws, { tmpPath: tmp, mime: headers['content-type'], name: q.name, label: q.label, dataDir: config.dataDir });
+  }, { stream: true });
+  on('POST', '/api/campaigns/:id/assets/from-upload', ({ p, body }) => core.createAssetsFromUpload(ctx, p.id, body));
 
   // ---------------------------------------------------------------- bulk scheduling
   on('GET', '/api/scheduling/defaults', () => ({ times: SUGGESTED_TIMES, weekdayOnly: WEEKDAY_ONLY }));
@@ -323,7 +370,7 @@ export function createApp({ db, ai, config, publisher, worker, tts = new TTSServ
       }
       const m = pathname.match(route.re);
       const p = Object.fromEntries(route.keys.map((k, i) => [k, decodeURIComponent(m[i + 1])]));
-      const rawBuf = ['POST', 'PATCH', 'PUT'].includes(req.method) ? await readBody(req, route.maxBody) : Buffer.alloc(0);
+      const rawBuf = ['POST', 'PATCH', 'PUT'].includes(req.method) && !route.stream ? await readBody(req, route.maxBody) : Buffer.alloc(0);
       const rawBody = route.binary ? rawBuf : rawBuf.toString('utf8');
       let body = {};
       if (rawBody && !route.rawBody && !route.binary) {

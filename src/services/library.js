@@ -25,7 +25,7 @@ const STOP = new Set(['with', 'your', 'that', 'this', 'from', 'into', 'then', 't
 const words = (t) => new Set(String(t || '').toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').split(/\s+/).filter((w) => w.length > 3 && !STOP.has(w)));
 
 export function listMedia(db, ws) {
-  const rows = db.all(null, 'SELECT id, name, label, mime, bytes, kind, duration, poster, created_at FROM media WHERE workspace_id = ? ORDER BY created_at', ws.id).map((r) => ({ ...r, kind: r.kind || 'image', posterUrl: r.poster ? `/api/media/${r.id}/poster` : null, poster: undefined }));
+  const rows = db.all(null, 'SELECT id, name, label, mime, bytes, kind, duration, poster, width, height, created_at FROM media WHERE workspace_id = ? ORDER BY created_at', ws.id).map((r) => ({ ...r, kind: r.kind || 'image', posterUrl: r.poster ? `/api/media/${r.id}/poster` : null, poster: undefined }));
   const shots = (ws.screenshots || []).map((s, i) => ({ kind: 'image', id: `wsshot_${ws.id}_${i}`, name: s.name || `Screenshot ${i + 1}`, label: s.label || s.name || `Screenshot ${i + 1}`, mime: (s.dataUrl.match(/^data:([^;]+)/) || [])[1], brandKit: true }));
   return [...shots, ...rows].map((m) => ({ ...m, url: `/api/media/${m.id}` }));
 }
@@ -61,7 +61,7 @@ export function getMedia(db, mediaId) {
 export const mediaDataUrl = (db, mediaId) => {
   const m = getMedia(db, mediaId);
   if (!m) return null;
-  if (m.kind === 'video') return m.poster && fs.existsSync(m.poster) ? `data:image/jpeg;base64,${fs.readFileSync(m.poster).toString('base64')}` : null;
+  if (m.kind === 'video' || m.kind === 'final') return m.poster && fs.existsSync(m.poster) ? `data:image/jpeg;base64,${fs.readFileSync(m.poster).toString('base64')}` : null;
   if (m.path) return fs.existsSync(m.path) ? `data:${m.mime};base64,${fs.readFileSync(m.path).toString('base64')}` : null;
   return `data:${m.mime};base64,${m.data.toString('base64')}`;
 };
@@ -131,4 +131,51 @@ export function resolveSceneMedia(scene, index, library) {
   }
   const item = best || library[index % library.length];
   return { item, fit: scene.media?.fit || 'contain', zoom: scene.media?.zoom ?? item.kind !== 'video', start: Number(scene.media?.start) || 0, auto: true, matched: !!best };
+}
+
+/**
+ * Finished videos (made elsewhere) keep their audio. H.264/AAC MP4s are only remuxed for
+ * fast start; anything else is converted. The file arrives already streamed to disk.
+ */
+export async function addFinalVideo(db, ws, { tmpPath, mime, name, label, dataDir }) {
+  const dir = path.join(dataDir, 'media');
+  fs.mkdirSync(dir, { recursive: true });
+  const mid = id('med');
+  const out = path.join(dir, `${mid}.mp4`);
+  let width = null;
+  let height = null;
+  let duration = null;
+  let poster = null;
+  let finalPath = out;
+  let outMime = 'video/mp4';
+  try {
+    const probe = JSON.parse(await run('ffprobe', ['-v', 'error', '-show_entries', 'stream=codec_type,codec_name,width,height:format=duration,format_name', '-of', 'json', tmpPath]));
+    const v = probe.streams.find((x) => x.codec_type === 'video');
+    const a = probe.streams.find((x) => x.codec_type === 'audio');
+    if (!v) throw new HttpError(400, 'That file has no video track');
+    width = v.width;
+    height = v.height;
+    duration = Number(probe.format?.duration) || null;
+    const compatible = /mp4|mov/.test(probe.format?.format_name || '') && v.codec_name === 'h264' && (!a || a.codec_name === 'aac');
+    const scale = "scale='if(gt(iw,ih),min(1920,iw),-2)':'if(gt(iw,ih),-2,min(1920,ih))'";
+    await run('ffmpeg', compatible ? ['-y', '-v', 'error', '-i', tmpPath, '-c', 'copy', '-movflags', '+faststart', out] : ['-y', '-v', 'error', '-i', tmpPath, '-vf', scale, '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '21', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '160k', '-movflags', '+faststart', out]);
+    fs.rmSync(tmpPath, { force: true });
+    poster = path.join(dir, `${mid}-poster.jpg`);
+    await run('ffmpeg', ['-y', '-v', 'error', '-ss', String(Math.min(1, (duration || 2) / 2)), '-i', out, '-frames:v', '1', '-vf', "scale='min(1280,iw)':-2", '-q:v', '4', poster]);
+  } catch (e) {
+    if (e instanceof HttpError) {
+      fs.rmSync(tmpPath, { force: true });
+      throw e;
+    }
+    console.warn(`[media] ffmpeg unavailable or failed (${String(e.message).slice(0, 120)}) — storing the original file`);
+    if (!fs.existsSync(out)) {
+      finalPath = path.join(dir, `${mid}-orig${path.extname(name || '') || '.mp4'}`);
+      fs.renameSync(tmpPath, finalPath);
+      outMime = mime || 'video/mp4';
+    }
+    if (poster && !fs.existsSync(poster)) poster = null;
+  }
+  const bytes = fs.statSync(finalPath).size;
+  db.insert('media', { id: mid, workspace_id: ws.id, name: String(name || 'video').slice(0, 120), label: String(label || name || '').slice(0, 160), mime: outMime, bytes, data: Buffer.alloc(0), path: finalPath, kind: 'final', duration, poster, width, height, created_at: nowIso() });
+  return { id: mid, name, label, mime: outMime, bytes, kind: 'final', duration, width, height, posterUrl: poster ? `/api/media/${mid}/poster` : null, url: `/api/media/${mid}` };
 }

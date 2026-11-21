@@ -177,6 +177,23 @@ CREATE TABLE IF NOT EXISTS notifications (
 );
 CREATE INDEX IF NOT EXISTS idx_notifications_ws ON notifications(workspace_id, dedupe_key);
 
+CREATE TABLE IF NOT EXISTS ai_video_jobs (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  asset_id TEXT,
+  scene_index INTEGER,
+  prompt TEXT NOT NULL,
+  aspect TEXT NOT NULL,
+  duration INTEGER NOT NULL,
+  reference_media_id TEXT,
+  label TEXT,
+  status TEXT NOT NULL,
+  media_id TEXT,
+  error TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS webhook_events (
   id TEXT PRIMARY KEY,
   workspace_id TEXT NOT NULL,
@@ -199,7 +216,7 @@ const BOOL_COLS = {
   campaign_tasks: ['done'],
   channel_connections: ['auto_publish'],
 };
-const HAS_UPDATED_AT = new Set(['workspaces', 'campaigns', 'creative_assets', 'schedule_jobs', 'campaign_tasks', 'channel_connections']);
+const HAS_UPDATED_AT = new Set(['ai_video_jobs', 'workspaces', 'campaigns', 'creative_assets', 'schedule_jobs', 'campaign_tasks', 'channel_connections']);
 
 export function openDb(file) {
   if (file !== ':memory:') fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -208,7 +225,7 @@ export function openDb(file) {
   raw.exec('PRAGMA foreign_keys = ON;');
   raw.exec(SCHEMA);
   // Additive migrations for databases created by earlier versions.
-  for (const sql of ['ALTER TABLE media ADD COLUMN path TEXT', 'ALTER TABLE media ADD COLUMN kind TEXT', 'ALTER TABLE media ADD COLUMN duration REAL', 'ALTER TABLE media ADD COLUMN poster TEXT']) {
+  for (const sql of ['ALTER TABLE media ADD COLUMN path TEXT', 'ALTER TABLE media ADD COLUMN kind TEXT', 'ALTER TABLE media ADD COLUMN duration REAL', 'ALTER TABLE media ADD COLUMN poster TEXT', 'ALTER TABLE media ADD COLUMN width INTEGER', 'ALTER TABLE media ADD COLUMN height INTEGER']) {
     try {
       raw.exec(sql);
     } catch {

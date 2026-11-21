@@ -240,7 +240,7 @@ export async function generatePackage(ctx, campaignId, { channels, formats, incl
   const existing = db.all('creative_assets', 'SELECT * FROM creative_assets WHERE campaign_id = ?', campaignId);
   const result = { created: [], replaced: [], skippedLocked: [] };
   for (const spec of specs) {
-    const same = existing.filter((a) => a.channel === spec.channel && a.format === spec.format);
+    const same = existing.filter((a) => a.channel === spec.channel && a.format === spec.format && !a.content?.uploaded);
     const replaceable = same.filter((a) => REPLACEABLE_STATES.has(a.state));
     const locked = same.filter((a) => !REPLACEABLE_STATES.has(a.state));
     if (replaceable.length) {
@@ -270,6 +270,13 @@ export async function regenerateAsset(ctx, assetId, { instruction = '' } = {}) {
   const campaign = db.byId('campaigns', asset.campaign_id);
   const workspace = db.byId('workspaces', campaign.workspace_id);
   const spec = { channel: asset.channel, format: asset.format, aspect_ratio: asset.aspect_ratio };
+  if (asset.content?.uploaded) {
+    if (LOCKED_STATES.has(asset.state)) throw new HttpError(409, 'This uploaded video is approved — edit its caption to send it back to review');
+    const gen = await uploadedCopy(ctx, { workspace, campaign, channel: asset.channel, format: asset.format, title: asset.title, description: asset.content.description, instruction });
+    const patch = { ...gen, utm_url: assetUtmUrl({ ...asset, version: asset.version + 1 }, campaign, workspace), version: asset.version + 1, content: { ...asset.content, hook: gen.headline } };
+    patch.score = scoreAsset({ ...asset, ...patch }, workspace);
+    return { mode: 'in_place', asset: db.update('creative_assets', asset.id, patch) };
+  }
   if (LOCKED_STATES.has(asset.state) || asset.state === 'FAILED') {
     const row = await buildAsset(ctx, { campaign, workspace, spec, version: 1, parent: asset, instruction, seed: `alt-${Date.now()}` });
     db.insert('creative_assets', row);
@@ -391,6 +398,59 @@ export function afterPublish(db, asset) {
     source: 'post_publish',
     asset_id: asset.id,
   });
+}
+
+// ============================================================ uploaded finished videos
+async function uploadedCopy(ctx, { workspace, campaign, channel, format, title, description, instruction = '' }) {
+  const gen = await ctx.ai.generateAsset({
+    workspace,
+    campaign,
+    channel,
+    format,
+    instruction: `This is a FINISHED video the team already produced — do not invent scenes. Title: ${title}. What it shows: ${description || title}. Write only the post copy: headline, caption (with {{link}}), cta and hashtags. ${instruction}`,
+  });
+  return { headline: gen.headline, caption: gen.caption, cta: gen.cta, hashtags: gen.hashtags, generator: gen.generator };
+}
+
+/** Turn an uploaded finished video into one DRAFT creative per chosen channel. */
+export async function createAssetsFromUpload(ctx, campaignId, { mediaId, channels = [], title, description = '', aiCaptions = true } = {}) {
+  const { db } = ctx;
+  const campaign = must(db.byId('campaigns', campaignId), 'Campaign');
+  const workspace = db.byId('workspaces', campaign.workspace_id);
+  const media = db.get(null, 'SELECT id, kind, duration, width, height FROM media WHERE id = ? AND workspace_id = ?', mediaId, workspace.id);
+  if (!media || media.kind !== 'final') throw new HttpError(400, 'Upload the video first');
+  const chosen = channels.filter((c) => CHANNELS[c]);
+  if (!chosen.length) throw new HttpError(400, 'Pick at least one channel');
+  const ratio = media.width && media.height ? media.width / media.height : 9 / 16;
+  const aspect = ratio < 0.7 ? '9:16' : ratio < 0.9 ? '4:5' : ratio < 1.2 ? '1:1' : '16:9';
+  const format = aspect === '9:16' ? 'reel' : 'video';
+  const name = String(title || 'Uploaded video').slice(0, 120);
+  const ids = [];
+  for (const channel of chosen) {
+    const copy = aiCaptions
+      ? await uploadedCopy(ctx, { workspace, campaign, channel, format, title: name, description })
+      : { headline: name, caption: `${name}${description ? `\n\n${description}` : ''}\n\n{{link}}`, cta: 'Try it free', hashtags: [], generator: 'manual' };
+    const assetId = id('ast');
+    const row = {
+      id: assetId,
+      campaign_id: campaign.id,
+      channel,
+      format,
+      aspect_ratio: aspect,
+      title: `${CHANNELS[channel].label} · ${name}`,
+      ...copy,
+      content: { uploaded: true, mediaId: media.id, durationSec: media.duration ? Math.round(media.duration) : null, width: media.width, height: media.height, description, angleName: 'Uploaded video', hook: copy.headline },
+      state: 'DRAFT',
+      version: 1,
+      auto_publish: true,
+    };
+    row.utm_url = assetUtmUrl(row, campaign, workspace);
+    row.score = scoreAsset(row, workspace);
+    db.insert('creative_assets', row);
+    db.insert('asset_events', { id: id('evt'), asset_id: assetId, from_state: null, to_state: 'DRAFT', actor: 'user', note: 'Created from an uploaded video', at: nowIso() });
+    ids.push(assetId);
+  }
+  return { created: ids, aspect, format };
 }
 
 // ============================================================ metrics, progress, iteration
@@ -610,8 +670,9 @@ export function shareKit({ db, config }, assetId) {
   const caption = String(asset.caption || '').replace(/\{\{link\}\}/g, link);
   const withTags = asset.hashtags?.length ? `${caption}\n\n${asset.hashtags.join(' ')}` : caption;
   const base = `/api/assets/${asset.id}`;
-  const media =
-    asset.format === 'carousel'
+  const media = asset.content?.uploaded
+    ? [{ label: `Finished video${asset.content.durationSec ? ` · ${asset.content.durationSec}s` : ''}`, svg: `${base}/media.svg`, aspect: asset.aspect_ratio, download: `/api/media/${asset.content.mediaId}?download=1`, kind: 'video' }]
+    : asset.format === 'carousel'
       ? (asset.content.slides || []).map((_, i) => ({ label: `Slide ${i + 1}`, svg: `${base}/media.svg?slide=${i}`, aspect: asset.aspect_ratio }))
       : [{ label: asset.format === 'reel' || asset.format === 'video' ? 'Storyboard preview (animated)' : 'Image', svg: `${base}/media.svg`, aspect: asset.aspect_ratio }];
   const steps = {
@@ -636,7 +697,7 @@ export function shareKit({ db, config }, assetId) {
     link,
     hashtags: asset.hashtags,
     media,
-    renderJob: asset.format === 'reel' || asset.format === 'video' ? `${base}/render-job` : null,
+    renderJob: (asset.format === 'reel' || asset.format === 'video') && !asset.content?.uploaded ? `${base}/render-job` : null,
     checklist: [...steps, 'Click “Mark as published” so the timeline and analytics update'],
     publicBaseUrl: config.publicBaseUrl,
   };
