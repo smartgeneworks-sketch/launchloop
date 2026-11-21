@@ -5,9 +5,9 @@
 html[data-theme='nuance'] {
   --paper: #f9f9f9;
   --card: #ffffff;
-  --ink: #121212;
-  --ink-2: #565656;
-  --ink-3: #818181;
+  --ink: #0d0d0d;
+  --ink-2: #333333;
+  --ink-3: #5c5c5c;
   --line: #e1e1e1;
   --line-2: #efefef;
   --side: #ffffff;
@@ -28,13 +28,13 @@ html[data-theme='nuance'] {
   --mono: 'IBM Plex Mono', ui-monospace, Menlo, Consolas, monospace;
   --r: 14px;
 }
-html[data-theme='nuance'] body { background: linear-gradient(#f9f9f9, #ffffff 420px) fixed; color: var(--ink); letter-spacing: -0.005em; }
+html[data-theme='nuance'] body { background: linear-gradient(#f9f9f9, #ffffff 420px) fixed; color: var(--ink); letter-spacing: -0.005em; font-weight: 450; -webkit-font-smoothing: auto; -moz-osx-font-smoothing: auto; }
 
 /* Sidebar: light, quiet, mono navigation like their header */
 html[data-theme='nuance'] .sidebar { background: #ffffff; color: var(--ink-2); border-right: 1px solid var(--line); }
-html[data-theme='nuance'] .brand { color: var(--ink); font: 400 21px var(--serif); letter-spacing: -0.03em; }
+html[data-theme='nuance'] .brand { color: var(--ink); font: 600 22px var(--serif); letter-spacing: -0.03em; }
 html[data-theme='nuance'] .brand-mark { background: var(--ink); color: #fff; }
-html[data-theme='nuance'] nav a { color: var(--ink-2); font: 500 11.5px var(--mono); text-transform: uppercase; letter-spacing: 0.06em; padding: 10px 12px; }
+html[data-theme='nuance'] nav a { color: #1f1f1f; font: 600 12px var(--mono); text-transform: uppercase; letter-spacing: 0.06em; padding: 10px 12px; }
 html[data-theme='nuance'] nav a:hover { background: #f4f4f4; color: var(--ink); }
 html[data-theme='nuance'] nav a.active { background: var(--signal); color: #fff; box-shadow: none; border-radius: 999px; }
 html[data-theme='nuance'] nav a.active .ico { opacity: 1; }
@@ -46,17 +46,17 @@ html[data-theme='nuance'] .ai-warn { background: var(--bad-soft); color: var(--b
 
 /* Top bar */
 html[data-theme='nuance'] .topbar { background: rgba(255, 255, 255, 0.86); border-bottom-color: var(--line); }
-html[data-theme='nuance'] .sel { font-family: var(--mono); font-size: 10.5px; }
-html[data-theme='nuance'] .sel select { border-radius: 999px; padding: 6px 14px; font-family: var(--sans); font-weight: 500; }
+html[data-theme='nuance'] .sel { font-family: var(--mono); font-size: 11px; font-weight: 600; color: var(--ink-2); }
+html[data-theme='nuance'] .sel select { border-radius: 999px; padding: 6px 14px; font-family: var(--sans); font-weight: 600; }
 
 /* Typography */
-html[data-theme='nuance'] h1.page { font: 400 40px/1.08 var(--serif); letter-spacing: -0.035em; }
-html[data-theme='nuance'] h2 { font: 500 16px/1.3 var(--sans); letter-spacing: -0.015em; }
-html[data-theme='nuance'] .eyebrow { font-family: var(--mono); font-weight: 500; letter-spacing: 0.07em; }
+html[data-theme='nuance'] h1.page { font: 600 40px/1.08 var(--serif); letter-spacing: -0.03em; }
+html[data-theme='nuance'] h2 { font: 700 16px/1.3 var(--sans); letter-spacing: -0.015em; }
+html[data-theme='nuance'] .eyebrow { font-family: var(--mono); font-weight: 600; letter-spacing: 0.07em; color: var(--ink-2); }
 html[data-theme='nuance'] .kpi .big,
-html[data-theme='nuance'] .pipe .n { font-family: var(--serif); font-weight: 400; letter-spacing: -0.03em; }
+html[data-theme='nuance'] .pipe .n { font-family: var(--serif); font-weight: 600; letter-spacing: -0.02em; }
 html[data-theme='nuance'] .ring { background: conic-gradient(var(--signal) calc(var(--p) * 1%), #ececec 0); }
-html[data-theme='nuance'] .ring > div { font-family: var(--serif); font-weight: 400; }
+html[data-theme='nuance'] .ring > div { font-family: var(--serif); font-weight: 600; }
 
 /* Cards & surfaces */
 html[data-theme='nuance'] .card,
@@ -73,7 +73,7 @@ html[data-theme='nuance'] .callout { background: #f6ead3; border-color: #ecd6ad;
 html[data-theme='nuance'] .callout.info { background: var(--info-soft); border-color: #cfdaea; }
 
 /* Buttons: pill-shaped like nuancelabs.ai */
-html[data-theme='nuance'] .btn { border-radius: 999px; background: var(--ink); border-color: var(--ink); font-weight: 500; padding: 9px 18px; }
+html[data-theme='nuance'] .btn { border-radius: 999px; background: var(--ink); border-color: var(--ink); font-weight: 600; padding: 9px 18px; }
 html[data-theme='nuance'] .btn.signal { background: var(--signal); border-color: var(--signal); }
 html[data-theme='nuance'] .btn.ok { background: #3f6b58; border-color: #3f6b58; }
 html[data-theme='nuance'] .btn.ghost { background: #ececec; border-color: #ececec; color: var(--ink); }
@@ -89,7 +89,7 @@ html[data-theme='nuance'] textarea:focus { border-color: var(--signal); box-shad
 html[data-theme='nuance'] .toggle input:checked + span { background: var(--signal); }
 
 /* State badges in the muted Nuance palette */
-html[data-theme='nuance'] .badge { font-family: var(--mono); font-weight: 500; letter-spacing: 0.05em; }
+html[data-theme='nuance'] .badge { font-family: var(--mono); font-weight: 600; letter-spacing: 0.04em; }
 html[data-theme='nuance'] .s-DRAFT { background: #efefef; color: #565656; }
 html[data-theme='nuance'] .s-NEEDS_REVIEW { background: #e4eaf4; color: #38598a; }
 html[data-theme='nuance'] .s-NEEDS_REVISION { background: #f6ead3; color: #8a5a17; }
@@ -120,3 +120,15 @@ html[data-theme='nuance'] .cat-Creative { background: #eceaf3; color: #5a5480; }
 html[data-theme='nuance'] .cat-Publishing { background: #f6ead3; color: #8a5a17; }
 html[data-theme='nuance'] .cat-Community { background: #e3ebe6; color: #3f6b58; }
 html[data-theme='nuance'] .cat-Analytics { background: #efefef; color: #565656; }
+
+/* Darker, heavier text for readability */
+html[data-theme='nuance'] label.f, html[data-theme='nuance'] div.f { color: #1f1f1f; font-weight: 600; }
+html[data-theme='nuance'] .li .title, html[data-theme='nuance'] .asset .name, html[data-theme='nuance'] table.t td b { font-weight: 600; color: var(--ink); }
+html[data-theme='nuance'] table.t th { color: var(--ink-2); font-family: var(--mono); font-weight: 600; }
+html[data-theme='nuance'] .page-sub, html[data-theme='nuance'] .rev .cap { color: #2b2b2b; }
+html[data-theme='nuance'] .muted { color: var(--ink-3); }
+html[data-theme='nuance'] .due, html[data-theme='nuance'] .mono { color: #3d3d3d; font-weight: 500; }
+html[data-theme='nuance'] .chip, html[data-theme='nuance'] .chip-check { font-weight: 600; color: #1f1f1f; }
+html[data-theme='nuance'] .kpi .lbl { color: var(--ink-2); }
+html[data-theme='nuance'] input, html[data-theme='nuance'] select, html[data-theme='nuance'] textarea { color: var(--ink); border-color: #cfcfcf; }
+html[data-theme='nuance'] .due.over { color: var(--bad); font-weight: 700; }
