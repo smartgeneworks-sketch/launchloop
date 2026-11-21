@@ -135,7 +135,8 @@ Pain points: ${JSON.stringify(workspace.pain_points || [])}
 Audience: ${workspace.audience || ''}
 Offer: ${workspace.offer || 'none'}; Pricing: ${workspace.pricing || 'n/a'}
 Referral / share mechanics: ${workspace.referral_mechanics || 'none defined'}
-Locale: ${JSON.stringify(workspace.locale || {})} (match the regional tone and spelling)
+Locale: ${JSON.stringify(workspace.locale || {})}
+Audience location: ${regionName(workspace.locale?.region)} — write for people there: local spelling and phrasing, prices in ${workspace.locale?.currency || 'the local currency'}, culturally relevant everyday examples, and the language "${workspace.locale?.language || 'en'}". Don't use stereotypes or forced slang.
 Campaign: ${campaign.name}; goal: ${campaign.goal || 'signups'}
 ${variationOf ? `This is a FOLLOW-UP VARIATION of a top performer. Keep what worked, change the hook angle. Original: ${JSON.stringify({ headline: variationOf.headline, hook: variationOf.content?.hook, caption: variationOf.caption })}. Metrics: ${JSON.stringify(metrics || {})}` : ''}
 ${instruction ? `Extra instruction from the user: ${instruction}` : ''}`);
@@ -183,6 +184,13 @@ Checklist: ${JSON.stringify(base().tasks.map(({ title, category, role, dayOffset
 }
 
 // ------------------------------------------------------------- helpers
+function regionName(code) {
+  try {
+    return (code && new Intl.DisplayNames(['en'], { type: 'region' }).of(code)) || 'not specified';
+  } catch {
+    return code || 'not specified';
+  }
+}
 export function aiErrorHint(msg, provider) {
   const key = provider === 'gemini' ? 'GEMINI' : 'OPENAI';
   if (/\b404\b/.test(msg)) return `Model not found — set ${key}_MODEL to a model your key can use.`;

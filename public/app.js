@@ -288,10 +288,10 @@ function viewWorkspace() {
         <label class="media-add">+ Upload images<span class="muted small">PNG / JPG · several at once</span><input type="file" accept="image/*" multiple data-upload="media" hidden></label></div>
       <h3 style="margin-top:18px">4 · Audience & locale</h3>
       <div class="form-grid">
-        <label class="f">Language<select name="language">${opt([['en', 'English'], ['es', 'Spanish'], ['fr', 'French'], ['de', 'German'], ['pt', 'Portuguese']], L.language)}</select></label>
-        <label class="f">Region<select name="region">${opt([['US', 'United States'], ['GB', 'United Kingdom'], ['IE', 'Ireland'], ['IS', 'Iceland'], ['DE', 'Germany'], ['FR', 'France'], ['ES', 'Spain'], ['BR', 'Brazil'], ['IN', 'India'], ['AU', 'Australia']], L.region)}</select></label>
-        <label class="f">Currency<select name="currency">${opt([['USD', 'USD $'], ['EUR', 'EUR €'], ['GBP', 'GBP £'], ['ISK', 'ISK kr'], ['INR', 'INR ₹'], ['BRL', 'BRL R$'], ['AUD', 'AUD $']], L.currency)}</select></label>
-        <label class="f">Date format<select name="dateFormat">${opt([['MMM D, YYYY', 'Nov 21, 2026'], ['DD/MM/YYYY', '21/11/2026'], ['MM/DD/YYYY', '11/21/2026'], ['YYYY-MM-DD', '2026-11-21']], L.dateFormat)}</select></label>
+        <label class="f">Region / country<select name="region" data-action="region-change">${regionOptions(L.region)}</select></label>
+        <label class="f">Language<select name="language">${languageOptions(L.language)}</select></label>
+        <label class="f">Currency <span class="hint">auto-set from country</span><select name="currency">${currencyOptions(L.currency)}</select></label>
+        <label class="f">Date format<select name="dateFormat">${opt([['D MMM YYYY', '21 Nov 2026'], ['DD/MM/YYYY', '21/11/2026'], ['MMM D, YYYY', 'Nov 21, 2026'], ['MM/DD/YYYY', '11/21/2026'], ['YYYY-MM-DD', '2026-11-21']], L.dateFormat)}</select></label>
         <label class="f">Regional tone<select name="tone">${opt([['friendly', 'Friendly'], ['direct', 'Direct'], ['formal', 'Formal'], ['playful', 'Playful']], L.tone)}</select></label>
         <div class="f">Preview<div class="muted">${esc(fmtDate(new Date().toISOString()))} · ${esc(w.pricing && /^\d+(\.\d+)?$/.test(w.pricing) ? money(w.pricing) : w.pricing || money(9))}</div></div>
       </div>
@@ -397,6 +397,44 @@ function resolveSceneMedia(scene, index, library) {
 }
 function mediaSelect(attrs, current, { allowAuto = true, defaultLabel = 'Auto (match by label)' } = {}) {
   return `<select ${attrs}>${allowAuto ? `<option value="auto" ${!current || current === 'auto' ? 'selected' : ''}>${defaultLabel}</option>` : ''}<option value="none" ${current === 'none' ? 'selected' : ''}>No image (brand background)</option>${(S.media || []).map((m) => `<option value="${esc(m.id)}" ${m.id === current ? 'selected' : ''}>${esc(m.label || m.name)}</option>`).join('')}</select>`;
+}
+
+// ---- regions, languages, currencies (complete lists via Intl; Africa listed first)
+const AFRICA = 'DZ AO BJ BW BF BI CV CM CF TD KM CG CD CI DJ EG GQ ER SZ ET GA GM GH GN GW KE LS LR LY MG MW ML MR MU MA MZ NA NE NG RW ST SN SC SL SO ZA SS SD TZ TG TN UG ZM ZW'.split(' ');
+const ALL_REGIONS = 'AF AX AL DZ AS AD AO AI AG AR AM AW AU AT AZ BS BH BD BB BY BE BZ BJ BM BT BO BA BW BR BN BG BF BI CV KH CM CA KY CF TD CL CN CO KM CG CD CK CR CI HR CU CW CY CZ DK DJ DM DO EC EG SV GQ ER EE SZ ET FK FO FJ FI FR GF PF GA GM GE DE GH GI GR GL GD GP GU GT GG GN GW GY HT HN HK HU IS IN ID IR IQ IE IM IL IT JM JP JE JO KZ KE KI KW KG LA LV LB LS LR LY LI LT LU MO MG MW MY MV ML MT MH MQ MR MU YT MX FM MD MC MN ME MS MA MZ MM NA NR NP NL NC NZ NI NE NG NU MK NO OM PK PW PS PA PG PY PE PH PL PT PR QA RE RO RU RW KN LC VC WS SM ST SA SN RS SC SL SG SX SK SI SB SO ZA KR SS ES LK SD SR SE CH SY TW TJ TZ TH TL TG TO TT TN TR TM TC TV UG UA AE GB US UY UZ VU VA VE VN VG VI YE ZM ZW'.split(' ');
+const REGION_CURRENCY = { GH: 'GHS', NG: 'NGN', KE: 'KES', ZA: 'ZAR', EG: 'EGP', MA: 'MAD', TZ: 'TZS', UG: 'UGX', RW: 'RWF', ET: 'ETB', ZM: 'ZMW', BW: 'BWP', NA: 'NAD', MU: 'MUR', DZ: 'DZD', TN: 'TND', AO: 'AOA', MZ: 'MZN', MW: 'MWK', SL: 'SLE', LR: 'LRD', GM: 'GMD', CD: 'CDF', SD: 'SDG', SS: 'SSP', SO: 'SOS', ER: 'ERN', DJ: 'DJF', LY: 'LYD', MG: 'MGA', CV: 'CVE', GN: 'GNF', MR: 'MRU', ST: 'STN', SC: 'SCR', KM: 'KMF', LS: 'LSL', SZ: 'SZL', BI: 'BIF', ZW: 'USD',
+  SN: 'XOF', CI: 'XOF', BJ: 'XOF', TG: 'XOF', BF: 'XOF', ML: 'XOF', NE: 'XOF', GW: 'XOF', CM: 'XAF', GA: 'XAF', CG: 'XAF', TD: 'XAF', CF: 'XAF', GQ: 'XAF',
+  US: 'USD', GB: 'GBP', IS: 'ISK', IN: 'INR', BR: 'BRL', AU: 'AUD', CA: 'CAD', NZ: 'NZD', JP: 'JPY', CN: 'CNY', CH: 'CHF', SE: 'SEK', NO: 'NOK', DK: 'DKK', PL: 'PLN', AE: 'AED', SA: 'SAR', QA: 'QAR', IL: 'ILS', TR: 'TRY', MX: 'MXN', AR: 'ARS', CL: 'CLP', CO: 'COP', PE: 'PEN', SG: 'SGD', MY: 'MYR', ID: 'IDR', PH: 'PHP', TH: 'THB', VN: 'VND', KR: 'KRW', PK: 'PKR', BD: 'BDT', LK: 'LKR', JM: 'JMD', TT: 'TTD', HK: 'HKD', TW: 'TWD', UA: 'UAH', CZ: 'CZK', HU: 'HUF', RO: 'RON', BG: 'BGN', RS: 'RSD' };
+const EURO = 'AT BE HR CY EE FI FR DE GR IE IT LV LT LU MT NL PT SK SI ES AD MC SM VA ME'.split(' ');
+const currencyFor = (r) => REGION_CURRENCY[r] || (EURO.includes(r) ? 'EUR' : null);
+const LANGS = ['en', 'fr', 'pt', 'ar', 'sw', 'ha', 'yo', 'ig', 'ak', 'ee', 'am', 'so', 'zu', 'xh', 'af', 'rw', 'wo', 'es', 'de', 'it', 'nl', 'hi', 'zh', 'ja', 'ko', 'id', 'tr', 'ru', 'pl'];
+const dn = (type, code) => {
+  try {
+    return new Intl.DisplayNames(['en'], { type }).of(code) || code;
+  } catch {
+    return code;
+  }
+};
+function regionOptions(cur) {
+  const o = (c) => `<option value="${c}" ${c === cur ? 'selected' : ''}>${esc(dn('region', c))}</option>`;
+  const byName = (a, b) => dn('region', a).localeCompare(dn('region', b));
+  return `<optgroup label="Africa">${[...AFRICA].sort(byName).map(o).join('')}</optgroup><optgroup label="All countries">${[...ALL_REGIONS].sort(byName).map(o).join('')}</optgroup>`;
+}
+function languageOptions(cur) {
+  const list = LANGS.includes(cur) || !cur ? LANGS : [cur, ...LANGS];
+  return list.map((c) => `<option value="${c}" ${c === cur ? 'selected' : ''}>${esc(dn('language', c))}</option>`).join('');
+}
+function currencyOptions(cur) {
+  let all = [];
+  try {
+    all = Intl.supportedValuesOf('currency');
+  } catch {
+    all = [...new Set(Object.values(REGION_CURRENCY).concat('EUR'))];
+  }
+  if (cur && !all.includes(cur)) all = [cur, ...all];
+  const pinned = ['GHS', 'NGN', 'KES', 'ZAR', 'XOF', 'XAF', 'EGP', 'USD', 'EUR', 'GBP'];
+  const o = (c) => `<option value="${c}" ${c === cur ? 'selected' : ''}>${c} — ${esc(dn('currency', c))}</option>`;
+  return `<optgroup label="Common">${pinned.map(o).join('')}</optgroup><optgroup label="All currencies">${all.filter((c) => !pinned.includes(c)).map(o).join('')}</optgroup>`;
 }
 
 const featRow = (f = {}) => `<div class="feat-row"><input type="text" data-feat="name" placeholder="Feature" value="${esc(f.name)}"><input type="text" data-feat="benefit" placeholder="Benefit" value="${esc(f.benefit)}"><button type="button" class="btn ghost sm" data-action="remove-feature">×</button></div>`;
@@ -776,6 +814,14 @@ const actions = {
   },
   async png(el) {
     await svgToPng(el.dataset.src, el.dataset.name);
+  },
+  'region-change'(el) {
+    const c = currencyFor(el.value);
+    const sel = $('form[data-form=workspace] [name=currency]');
+    if (c && sel) sel.value = c;
+    const df = $('form[data-form=workspace] [name=dateFormat]');
+    if (df && !['US'].includes(el.value) && df.value === 'MM/DD/YYYY') df.value = 'D MMM YYYY';
+    toast(`Region set to ${dn('region', el.value)}${c ? ` · currency ${c}` : ''} — click Save workspace`);
   },
   'font-change'() {
     updateBrandPreview();
