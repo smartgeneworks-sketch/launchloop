@@ -12,6 +12,7 @@ import { buildUtmUrl, parseUtmContent, utmContentFor } from '../src/services/utm
 import { seed } from '../src/seed.js';
 import { createWorker } from '../src/worker.js';
 import { start } from '../src/server.js';
+import { Notifier } from '../src/services/notify.js';
 
 const mkCtx = () => {
   const config = makeConfig({ PUBLISH_MODE: 'mock', SIMULATE_METRICS: 'false' });
@@ -210,5 +211,62 @@ describe('HTTP API', () => {
     await new Promise((r) => setTimeout(r, 300));
     const assets = await (await fetch(`${base}/api/campaigns/${body.campaignId}/assets`)).json();
     assert.ok(assets.length > 0 && assets.every((a) => a.state === 'DRAFT'), 'webhook drafts are never auto-approved');
+  });
+});
+
+describe('reminders (email + WhatsApp)', () => {
+  async function setupNotifier({ fail = false } = {}) {
+    const { ctx, workspace, campaign } = await setup();
+    const calls = [];
+    const fetchImpl = async (url, opts) => {
+      calls.push({ url, body: JSON.parse(opts.body), headers: opts.headers });
+      if (fail) return new Response(JSON.stringify({ error: { message: 'Invalid token' } }), { status: 401 });
+      return new Response(JSON.stringify(url.includes('resend') ? { id: 'em_1' } : { messages: [{ id: 'wamid.1' }] }), { status: 200 });
+    };
+    const config = { ...ctx.config, publicBaseUrl: 'https://applaunchloop.com', env: { RESEND_API_KEY: 're_x', NOTIFY_EMAIL_FROM: 'LaunchLoop <reminders@applaunchloop.com>', WHATSAPP_TOKEN: 'wa_x', WHATSAPP_PHONE_NUMBER_ID: '123' } };
+    const n = new Notifier({ db: ctx.db, config, fetchImpl });
+    n.saveSettings(workspace, { email: 'gene@example.com', whatsapp: '+233 24 123 4567', timezone: 'Africa/Accra', digestTime: '08:00' });
+    return { ctx, workspace, campaign, n, calls };
+  }
+
+  test('post-due reminder goes to both channels once, with a Share Kit link', async () => {
+    const { ctx, campaign, n, calls } = await setupNotifier();
+    const asset = ctx.db.get('creative_assets', `SELECT * FROM creative_assets WHERE campaign_id = ? AND channel = 'tiktok'`, campaign.id);
+    await n.postDue(asset);
+    await n.postDue(asset); // duplicate trigger
+    assert.equal(calls.length, 2);
+    const email = calls.find((c) => c.url.includes('resend'));
+    const wa = calls.find((c) => c.url.includes('graph.facebook.com'));
+    assert.deepEqual(email.body.to, ['gene@example.com']);
+    assert.match(email.body.html, /#\/review\?kit=ast_/);
+    assert.equal(wa.body.to, '233241234567');
+    assert.equal(wa.body.template.name, 'launchloop_reminder');
+    for (const p of wa.body.template.components[0].parameters) assert.doesNotMatch(p.text, /\n|\t| {4,}/);
+  });
+
+  test('failures are logged, not thrown', async () => {
+    const { ctx, workspace, campaign, n } = await setupNotifier({ fail: true });
+    const asset = ctx.db.get('creative_assets', `SELECT * FROM creative_assets WHERE campaign_id = ? AND state = 'FAILED'`, campaign.id);
+    const r = await n.publishFailed(asset, 'boom');
+    assert.ok(r.every((x) => x.status === 'failed' && /401/.test(x.error)));
+    assert.equal(n.log(workspace).length, 2);
+  });
+
+  test('daily digest is sent once, only after the chosen local time', async () => {
+    const { n, calls } = await setupNotifier();
+    const day = new Date().toISOString().slice(0, 10);
+    await n.digestTick(new Date(`${day}T07:30:00Z`)); // 07:30 in Accra (UTC+0) — too early
+    assert.equal(calls.length, 0);
+    await n.digestTick(new Date(`${day}T08:05:00Z`));
+    await n.digestTick(new Date(`${day}T09:00:00Z`));
+    assert.equal(calls.length, 2); // email + WhatsApp, once
+    assert.match(calls[0].body.subject, /LaunchLoop today/);
+  });
+
+  test('settings validation', async () => {
+    const { workspace, n } = await setupNotifier();
+    assert.throws(() => n.saveSettings(workspace, { whatsapp: '0241234' }), /country code/);
+    assert.throws(() => n.saveSettings(workspace, { email: 'not-an-email' }), /valid email/);
+    assert.equal(n.saveSettings(workspace, { whatsapp: '233241234567' }).whatsapp, '+233241234567');
   });
 });

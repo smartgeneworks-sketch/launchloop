@@ -89,6 +89,7 @@ async function busy(btn, fn) {
     return await fn();
   } catch (e) {
     toast(e.message, 'bad');
+    e.toasted = true;
     throw e;
   } finally {
     btn?.classList.remove('busy');
@@ -119,7 +120,7 @@ async function loadWorkspaces(selectId) {
 async function loadWorkspace(selectCmp) {
   if (!S.wsId) return render();
   localStorage.setItem('ll_ws', S.wsId);
-  [S.ws, S.channels, S.campaigns, S.media] = await Promise.all([api('GET', `/api/workspaces/${S.wsId}`), api('GET', `/api/workspaces/${S.wsId}/channels`), api('GET', `/api/workspaces/${S.wsId}/campaigns`), api('GET', `/api/workspaces/${S.wsId}/media`)]);
+  [S.ws, S.channels, S.campaigns, S.media, S.notif] = await Promise.all([api('GET', `/api/workspaces/${S.wsId}`), api('GET', `/api/workspaces/${S.wsId}/channels`), api('GET', `/api/workspaces/${S.wsId}/campaigns`), api('GET', `/api/workspaces/${S.wsId}/media`), api('GET', `/api/workspaces/${S.wsId}/notifications`).catch(() => null)]);
   S.cmpId = selectCmp || (S.campaigns.find((c) => c.id === localStorage.getItem('ll_cmp')) || S.campaigns[0])?.id || null;
   await loadCampaign();
 }
@@ -194,6 +195,11 @@ function render() {
   }
   $('#view').innerHTML = VIEWS[r]();
   window.scrollTo(0, scroll);
+  const kit = new URLSearchParams(location.hash.split('?')[1] || '').get('kit');
+  if (kit) {
+    history.replaceState(null, '', location.pathname + location.search + '#/' + r);
+    openShareKit(kit).catch((e) => toast(e.message, 'bad'));
+  }
 }
 
 // ------------------------------------------------------------------ dashboard
@@ -306,6 +312,7 @@ function viewWorkspace() {
     <div class="card"><div class="card-head"><h2>Channels & auto-publish rules</h2></div>
       <p class="muted small" style="margin-top:-6px">API channels post approved, scheduled items automatically via official APIs. Share Kit channels get pre-sized media, captions and a checklist for one-tap manual posting.</p>
       <table class="t"><tbody>${S.channels.map(channelRow).join('')}</tbody></table></div>
+    ${remindersCard()}
     <div class="card"><div class="card-head"><h2>Inbound webhooks</h2><button class="btn ghost xs" data-action="rotate-secret">Rotate secret</button></div>
       <div class="small stack" style="gap:10px">
         <div><div class="eyebrow">Workspace ID</div><div class="copybox"><input type="text" readonly value="${esc(w.id)}"><button class="btn ghost sm" data-copy="${esc(w.id)}">Copy</button></div></div>
@@ -465,6 +472,48 @@ function currencyOptions(cur) {
   const pinned = ['GHS', 'NGN', 'KES', 'ZAR', 'XOF', 'XAF', 'EGP', 'USD', 'EUR', 'GBP'];
   const o = (c) => `<option value="${c}" ${c === cur ? 'selected' : ''}>${c} — ${esc(dn('currency', c))}</option>`;
   return `<optgroup label="Common">${pinned.map(o).join('')}</optgroup><optgroup label="All currencies">${all.filter((c) => !pinned.includes(c)).map(o).join('')}</optgroup>`;
+}
+
+// ---- reminders card
+function timezoneOptions(cur) {
+  let zones = [];
+  try {
+    zones = Intl.supportedValuesOf('timeZone');
+  } catch {
+    zones = ['UTC', 'Africa/Accra', 'Africa/Lagos', 'Africa/Nairobi', 'Africa/Johannesburg', 'Europe/London', 'America/New_York'];
+  }
+  if (cur && !zones.includes(cur)) zones = [cur, ...zones];
+  const africa = zones.filter((z) => z.startsWith('Africa/'));
+  const o = (z) => `<option value="${esc(z)}" ${z === cur ? 'selected' : ''}>${esc(z.replace(/_/g, ' '))}</option>`;
+  return `<optgroup label="Africa">${africa.map(o).join('')}</optgroup><optgroup label="All time zones">${zones.filter((z) => !z.startsWith('Africa/')).map(o).join('')}</optgroup>`;
+}
+function remindersCard() {
+  const n = S.notif;
+  if (!n) return '';
+  const st = n.settings;
+  const prov = (k, label) => (n.providers[k].configured ? `<span class="badge b-api">${label} ready</span>` : `<span class="badge b-mute" title="Add the provider keys in Render → Environment">${label} not set up on server</span>`);
+  const tog = (name, checked, label) => `<label class="row small" style="gap:8px"><span class="toggle"><input type="checkbox" name="${name}" ${checked ? 'checked' : ''}><span></span></span>${label}</label>`;
+  const log = (n.log || []).filter((l) => l.status !== 'skipped').slice(0, 5);
+  return `<form class="card" data-form="notifications">
+    <div class="card-head"><h2>Reminders</h2><div class="row" style="gap:6px">${prov('email', 'Email')}${prov('whatsapp', 'WhatsApp')}</div></div>
+    <p class="muted small" style="margin-top:-6px">Get a message when a post is due (with a link straight to its Share Kit), when a post fails, and a daily plan each morning.</p>
+    <div class="form-grid">
+      <label class="f">Email<input type="text" name="email" value="${esc(st.email)}" placeholder="you@passportbatch.com"></label>
+      <label class="f">WhatsApp number<input type="text" name="whatsapp" value="${esc(st.whatsapp)}" placeholder="+233 24 123 4567"></label>
+    </div>
+    <div class="row" style="gap:18px;margin:12px 0 6px">${tog('ch_email', st.channels.email, 'Email')}${tog('ch_whatsapp', st.channels.whatsapp, 'WhatsApp')}</div>
+    <div class="stack" style="gap:8px;margin:8px 0">
+      ${tog('ev_postDue', st.events.postDue, '<b>Post due</b> — when a Share Kit post needs posting')}
+      ${tog('ev_publishFailed', st.events.publishFailed, '<b>Publish failed</b> — when an automatic post fails')}
+      <div class="row" style="gap:8px;flex-wrap:nowrap">${tog('ev_digest', st.events.digest, '<b>Daily digest</b> at')}<input type="time" name="digestTime" value="${esc(st.digestTime)}" style="width:120px"></div>
+    </div>
+    <label class="f">Time zone<select name="timezone">${timezoneOptions(st.timezone)}</select></label>
+    <div class="row" style="margin-top:12px;gap:8px"><button class="btn">Save reminders</button>
+      <button type="button" class="btn ghost sm" data-action="test-reminder" data-v="email">Test email</button>
+      <button type="button" class="btn ghost sm" data-action="test-reminder" data-v="whatsapp">Test WhatsApp</button>
+      <button type="button" class="btn ghost sm" data-action="digest-now">Send today’s digest now</button></div>
+    ${log.length ? `<div class="list small" style="margin-top:12px"><div class="eyebrow">Recent reminders</div>${log.map((l) => `<div class="li"><span class="lvl ${l.status === 'sent' ? 'success' : 'error'}"></span><div class="grow">${esc(l.subject || l.kind)} <span class="muted">· ${esc(l.channel)} · ${esc(rel(l.created_at))}</span>${l.error ? `<div class="err" style="margin-top:4px">${esc(l.error)}</div>` : ''}</div></div>`).join('')}</div>` : ''}
+  </form>`;
 }
 
 const featRow = (f = {}) => `<div class="feat-row"><input type="text" data-feat="name" placeholder="Feature" value="${esc(f.name)}"><input type="text" data-feat="benefit" placeholder="Benefit" value="${esc(f.benefit)}"><button type="button" class="btn ghost sm" data-action="remove-feature">×</button></div>`;
@@ -850,6 +899,21 @@ const actions = {
     history.replaceState(null, '', location.pathname + location.hash);
     location.reload();
   },
+  async 'test-reminder'(el) {
+    const f = $('form[data-form=notifications]');
+    if (f) await forms.notifications(f, new FormData(f), null, { silent: true });
+    const r = await busy(el, () => api('POST', `/api/workspaces/${S.wsId}/notifications/test`, { channel: el.dataset.v }));
+    toast(`Test ${r.channel === 'email' ? 'email' : 'WhatsApp message'} sent ✓ — check your ${r.channel === 'email' ? 'inbox' : 'phone'}`, 'ok');
+    S.notif = await api('GET', `/api/workspaces/${S.wsId}/notifications`);
+    render();
+  },
+  async 'digest-now'(el) {
+    const r = await busy(el, () => api('POST', `/api/workspaces/${S.wsId}/notifications/digest-now`));
+    if (!r.sent) toast(r.reason || `Not sent: ${(r.results || []).map((x) => `${x.channel}: ${x.error}`).join('; ') || 'no channel enabled'}`, 'bad');
+    else toast('Digest sent ✓', 'ok');
+    S.notif = await api('GET', `/api/workspaces/${S.wsId}/notifications`);
+    render();
+  },
   'region-change'(el) {
     const c = currencyFor(el.value);
     const sel = $('form[data-form=workspace] [name=currency]');
@@ -1059,6 +1123,22 @@ const forms = {
     const updated = await busy(btn, () => api('PATCH', `/api/assets/${a.id}`, { headline: fd.get('headline'), caption: fd.get('caption'), cta: fd.get('cta'), hashtags: fd.get('hashtags'), content }));
     toast(updated.state !== a.state ? `Saved — moved to ${STATE_LABEL[updated.state]} for re-approval` : 'Saved', 'ok');
     await afterAssetChange(a.id);
+  },
+  async notifications(f, fd, btn, { silent = false } = {}) {
+    const body = {
+      email: fd.get('email'),
+      whatsapp: fd.get('whatsapp'),
+      channels: { email: !!fd.get('ch_email'), whatsapp: !!fd.get('ch_whatsapp') },
+      events: { postDue: !!fd.get('ev_postDue'), publishFailed: !!fd.get('ev_publishFailed'), digest: !!fd.get('ev_digest') },
+      digestTime: fd.get('digestTime') || '08:00',
+      timezone: fd.get('timezone'),
+    };
+    await busy(btn, () => api('PUT', `/api/workspaces/${S.wsId}/notifications`, body));
+    S.notif = await api('GET', `/api/workspaces/${S.wsId}/notifications`);
+    if (!silent) {
+      toast('Reminders saved', 'ok');
+      render();
+    }
   },
   async 'mark-published'(f, fd, btn) {
     await busy(btn, () => api('POST', `/api/assets/${f.dataset.id}/mark-published`, { url: fd.get('url') || null }));
@@ -1625,7 +1705,7 @@ document.addEventListener('click', async (e) => {
   try {
     await fn(el, e);
   } catch (err) {
-    if (!el.classList.contains('busy')) toast(err.message, 'bad');
+    if (!err.toasted) toast(err.message, 'bad');
   }
 });
 document.addEventListener('change', async (e) => {

@@ -20,6 +20,7 @@ import { TTSService, assetVoiceover } from './services/tts.js';
 import { FontService } from './services/fonts.js';
 import { addMedia, getMedia, listMedia, mediaDataUrl, resolveSceneMedia } from './services/library.js';
 import { FONTS, PAIRINGS } from './lib/fonts.js';
+import { Notifier } from './services/notify.js';
 import { STATES, allowedNext } from './services/stateMachine.js';
 import { buildUtmUrl } from './services/utm.js';
 import { createWorker } from './worker.js';
@@ -29,7 +30,7 @@ const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.json': 'application/json' };
 const MAX_BODY = 6 * 1024 * 1024;
 
-export function createApp({ db, ai, config, publisher, worker, tts = new TTSService(config.env, { dataDir: config.dataDir }), fonts = new FontService({ dataDir: config.dataDir }) }) {
+export function createApp({ db, ai, config, publisher, worker, tts = new TTSService(config.env, { dataDir: config.dataDir }), fonts = new FontService({ dataDir: config.dataDir }), notifier = new Notifier({ db, config }) }) {
   const ctx = { db, ai, config };
   const routes = [];
   const on = (method, pattern, handler, opts = {}) => {
@@ -197,6 +198,32 @@ export function createApp({ db, ai, config, publisher, worker, tts = new TTSServ
     res.end(css);
   }, { raw: true, public: true });
 
+  // ---------------------------------------------------------------- reminders (email + WhatsApp)
+  on('GET', '/api/workspaces/:id/notifications', ({ p }) => {
+    const ws = must(db.byId('workspaces', p.id), 'Workspace');
+    return { settings: notifier.settings(ws), providers: notifier.providers(), log: notifier.log(ws, 15) };
+  });
+  on('PUT', '/api/workspaces/:id/notifications', ({ p, body }) => notifier.saveSettings(must(db.byId('workspaces', p.id), 'Workspace'), body));
+  on('POST', '/api/workspaces/:id/notifications/test', async ({ p, body }) => {
+    const ws = must(db.byId('workspaces', p.id), 'Workspace');
+    const s = notifier.settings(ws);
+    const channel = body.channel === 'whatsapp' ? 'whatsapp' : 'email';
+    if (!s[channel]) throw new HttpError(400, channel === 'email' ? 'Add an email address first' : 'Add a WhatsApp number first');
+    if (!notifier.providers()[channel].configured) throw new HttpError(409, channel === 'email' ? 'Email sending is not set up on the server yet (RESEND_API_KEY and NOTIFY_EMAIL_FROM).' : 'WhatsApp sending is not set up on the server yet (WHATSAPP_TOKEN and WHATSAPP_PHONE_NUMBER_ID).');
+    const [r] = await notifier.notify(ws, { kind: 'test', key: 'test', force: true, only: channel, subject: 'LaunchLoop test reminder', title: 'Reminders are working ✓', lines: [`This is a test ${channel === 'email' ? 'email' : 'WhatsApp message'} from LaunchLoop for ${ws.name}.`, 'You will get messages like this when a post is due, when a post fails, and in your daily digest.'], link: notifier.link('#/'), linkLabel: 'Open LaunchLoop' });
+    if (!r || r.status !== 'sent') throw new HttpError(502, r?.error || 'Send failed');
+    return { sent: true, channel };
+  });
+  on('POST', '/api/workspaces/:id/notifications/digest-now', async ({ p }) => {
+    const ws = must(db.byId('workspaces', p.id), 'Workspace');
+    const s = notifier.settings(ws);
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone: s.timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+    const d = notifier.digestFor(ws, today, s.timezone);
+    if (!d) return { sent: false, reason: 'Nothing scheduled or pending today' };
+    const r = await notifier.notify(ws, { kind: 'digest', key: `digest-preview:${Date.now()}`, force: true, subject: 'LaunchLoop today (preview)', title: 'Your LaunchLoop plan for today', lines: d.lines, link: notifier.link('#/'), linkLabel: 'Open dashboard' });
+    return { sent: r.some((x) => x.status === 'sent'), results: r.map(({ channel, status, error }) => ({ channel, status, error })), lines: d.lines };
+  });
+
   // ---------------------------------------------------------------- tools
   on('POST', '/api/utm', ({ body }) => ({ url: buildUtmUrl(body.url, body) }));
 
@@ -293,7 +320,8 @@ export async function start(overrides = {}) {
   const db = openDb(overrides.dbFile || path.join(config.dataDir, 'launchloop.db'));
   const ai = new AIService(config.env);
   const publisher = new Publisher({ mode: config.publishMode, failureRate: config.mockFailureRate, env: config.env });
-  const worker = createWorker({ db, publisher, config });
+  const notifier = new Notifier({ db, config });
+  const worker = createWorker({ db, publisher, config, notifier });
   core.syncChannelStatuses({ db, config });
   const seedDemo = config.env.SEED_DEMO ? config.env.SEED_DEMO === 'true' : !isProd;
   if (seedDemo && !db.scalar('SELECT COUNT(*) FROM workspaces')) {
@@ -301,7 +329,7 @@ export async function start(overrides = {}) {
     await seed({ db, ai, config });
     console.log('[seed] Demo workspace "Relay" created');
   }
-  const server = http.createServer(createApp({ db, ai, config, publisher, worker }));
+  const server = http.createServer(createApp({ db, ai, config, publisher, worker, notifier }));
   await new Promise((r) => server.listen(config.port, r));
   if (overrides.worker !== false) worker.start();
   const port = server.address().port;

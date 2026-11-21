@@ -156,6 +156,27 @@ CREATE TABLE IF NOT EXISTS media (
 );
 CREATE INDEX IF NOT EXISTS idx_media_ws ON media(workspace_id);
 
+CREATE TABLE IF NOT EXISTS notification_settings (
+  workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
+  settings TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS notifications (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  channel TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  dedupe_key TEXT NOT NULL,
+  recipient TEXT,
+  subject TEXT,
+  status TEXT NOT NULL,
+  error TEXT,
+  provider_id TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_notifications_ws ON notifications(workspace_id, dedupe_key);
+
 CREATE TABLE IF NOT EXISTS webhook_events (
   id TEXT PRIMARY KEY,
   workspace_id TEXT NOT NULL,

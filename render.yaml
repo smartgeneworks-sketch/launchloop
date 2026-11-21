@@ -37,3 +37,13 @@ services:
         sync: false
       - key: LINKEDIN_AUTHOR_URN
         sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: NOTIFY_EMAIL_FROM
+        sync: false
+      - key: WHATSAPP_TOKEN
+        sync: false
+      - key: WHATSAPP_PHONE_NUMBER_ID
+        sync: false
+      - key: WHATSAPP_TEMPLATE
+        value: launchloop_reminder

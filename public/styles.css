@@ -286,3 +286,5 @@ ul.clean li { margin: 3px 0; }
 .brand .logo-on-light { display: none; }
 html[data-theme='nuance'] .brand .logo-on-light { display: block; }
 html[data-theme='nuance'] .brand .logo-on-dark { display: none; }
+
+.logo-pv { background: repeating-conic-gradient(#d9d9d9 0 25%, #f2f2f2 0 50%) 0 0 / 14px 14px !important; border: 1px solid var(--line); }

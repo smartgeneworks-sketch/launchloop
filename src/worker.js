@@ -19,7 +19,7 @@ import { transition } from './services/stateMachine.js';
 const MAX_ATTEMPTS = 3;
 const BACKOFF_S = [30, 120, 600];
 
-export function createWorker({ db, publisher, config }) {
+export function createWorker({ db, publisher, config, notifier = null }) {
   let timer = null;
   let running = false;
   const state = { lastTick: null, processed: 0 };
@@ -74,6 +74,7 @@ export function createWorker({ db, publisher, config }) {
             });
         });
         log(job, 'info', `Manual publishing required — ${e.message}. Share Kit task created.`);
+        notifier?.postDue(asset).catch((err) => console.warn('[notify]', err.message));
         return;
       }
       const attempts = job.attempts;
@@ -99,6 +100,7 @@ export function createWorker({ db, publisher, config }) {
           });
         });
         log(job, 'error', `Failed after ${attempts} attempts: ${e.message}. Asset marked FAILED.`);
+        notifier?.publishFailed(asset, e.message).catch((err) => console.warn('[notify]', err.message));
       }
     }
   }
@@ -113,6 +115,7 @@ export function createWorker({ db, publisher, config }) {
         state.processed++;
       }
       if (publisher.mode === 'mock' && config.simulateMetrics) growSimulatedMetrics(db);
+      if (notifier) await notifier.digestTick().catch((err) => console.warn('[notify] digest', err.message));
       state.lastTick = nowIso();
       return { processed: due.length };
     } finally {
