@@ -295,6 +295,7 @@ function viewWorkspace() {
         <label class="f">Regional tone<select name="tone">${opt([['friendly', 'Friendly'], ['direct', 'Direct'], ['formal', 'Formal'], ['playful', 'Playful']], L.tone)}</select></label>
         <div class="f">Preview<div class="muted">${esc(fmtDate(new Date().toISOString()))} · ${esc(w.pricing && /^\d+(\.\d+)?$/.test(w.pricing) ? money(w.pricing) : w.pricing || money(9))}</div></div>
       </div>
+      <div class="save-bar"><span class="muted small" id="saveState">Brand colours and fonts save automatically. Other changes: click Save.</span><button class="btn">Save workspace</button></div>
     </form>
   </div>
   <div class="stack">
@@ -353,6 +354,31 @@ function siteThemeCard(w) {
     <button type="button" class="btn sm" data-action="apply-site-theme">Apply site theme</button></div>`;
 }
 
+/** Brand colours/fonts currently in the form (so other actions never discard unsaved picks). */
+function brandFromForm() {
+  const f = $('form[data-form=workspace]');
+  if (!f) return { ...S.ws.brand };
+  const fd = new FormData(f);
+  return { ...S.ws.brand, colors: { primary: fd.get('color_primary'), secondary: fd.get('color_secondary'), accent: fd.get('color_accent') }, fonts: { heading: fd.get('font_heading'), body: fd.get('font_body') } };
+}
+let brandSaveTimer = null;
+function autosaveBrand() {
+  clearTimeout(brandSaveTimer);
+  const st = $('#saveState');
+  if (st) st.textContent = 'Saving brand…';
+  brandSaveTimer = setTimeout(async () => {
+    try {
+      const saved = await api('PATCH', `/api/workspaces/${S.wsId}`, { brand: brandFromForm() });
+      S.ws.brand = saved.brand;
+      const el = $('#saveState');
+      if (el) el.textContent = `Brand colours & fonts saved ✓ ${new Date().toLocaleTimeString(locale(), { hour: '2-digit', minute: '2-digit' })}`;
+    } catch (e) {
+      toast(`Couldn't save brand: ${e.message}`, 'bad');
+      const el = $('#saveState');
+      if (el) el.textContent = 'Brand not saved — see error';
+    }
+  }, 350);
+}
 function updateBrandPreview() {
   const f = $('form[data-form=workspace]');
   const el = $('#brandPreview');
@@ -825,15 +851,16 @@ const actions = {
   },
   'font-change'() {
     updateBrandPreview();
+    autosaveBrand();
   },
   async 'apply-pairing'(el) {
-    S.ws = await api('PATCH', `/api/workspaces/${S.wsId}`, { brand: { ...S.ws.brand, fonts: { heading: el.dataset.h, body: el.dataset.b } } });
+    S.ws = await api('PATCH', `/api/workspaces/${S.wsId}`, { brand: { ...brandFromForm(), fonts: { heading: el.dataset.h, body: el.dataset.b } } });
     toast(`Fonts set to ${el.dataset.h} + ${el.dataset.b}`, 'ok');
     render();
   },
   async 'apply-site-theme'() {
     const sg = S.ws.source_meta?.brandSuggestion || {};
-    S.ws = await api('PATCH', `/api/workspaces/${S.wsId}`, { brand: { ...S.ws.brand, ...(sg.colors ? { colors: sg.colors } : {}), ...(sg.fonts ? { fonts: sg.fonts } : {}) } });
+    S.ws = await api('PATCH', `/api/workspaces/${S.wsId}`, { brand: { ...brandFromForm(), ...(sg.colors ? { colors: sg.colors } : {}), ...(sg.fonts ? { fonts: sg.fonts } : {}) } });
     toast('Applied your website’s colours and fonts', 'ok');
     render();
   },
@@ -887,7 +914,7 @@ const actions = {
   'add-feature': () => $('#features').insertAdjacentHTML('beforeend', featRow()),
   'remove-feature': (el) => el.closest('.feat-row').remove(),
   async 'remove-logo'() {
-    S.ws = await api('PATCH', `/api/workspaces/${S.wsId}`, { brand: { ...S.ws.brand, logo: null } });
+    S.ws = await api('PATCH', `/api/workspaces/${S.wsId}`, { brand: { ...brandFromForm(), logo: null } });
     render();
   },
   async 'remove-shot'(el) {
@@ -1608,7 +1635,10 @@ document.addEventListener('change', async (e) => {
     if (m) m.label = el.value;
     return toast('Label saved');
   }
-  if (el.name?.startsWith('color_')) return updateBrandPreview();
+  if (el.name?.startsWith('color_')) {
+    updateBrandPreview();
+    return autosaveBrand();
+  }
   if (el.dataset.upload === 'media') {
     const files = [...el.files];
     if (!files.length) return;
@@ -1645,7 +1675,7 @@ document.addEventListener('change', async (e) => {
     const file = el.files[0];
     if (!file) return;
     const dataUrl = await readFile(file);
-    const body = el.dataset.upload === 'logo' ? { brand: { ...S.ws.brand, logo: dataUrl } } : { screenshots: [...(S.ws.screenshots || []), { name: file.name, dataUrl }] };
+    const body = el.dataset.upload === 'logo' ? { brand: { ...brandFromForm(), logo: dataUrl } } : { screenshots: [...(S.ws.screenshots || []), { name: file.name, dataUrl }] };
     try {
       S.ws = await api('PATCH', `/api/workspaces/${S.wsId}`, body);
       toast('Uploaded', 'ok');
@@ -1674,6 +1704,7 @@ document.addEventListener('submit', async (e) => {
   }
 });
 document.addEventListener('input', (e) => {
+  if (e.target.name?.startsWith('color_')) updateBrandPreview();
   if (e.target.name === 'caption' && e.target.dataset.limit) {
     const c = $('#capCount');
     const n = e.target.value.length;
