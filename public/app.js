@@ -170,7 +170,7 @@ function renderModes() {
     ${err ? `<div class="ai-warn" title="${esc(err.message)}">⚠ AI request failed (${esc(err.message)}) — creatives fell back to templates. ${esc(err.hint || '')}</div>` : ''}
     <div class="mode-pill"><span><span class="dot ${h.publishMode === 'live' ? 'live' : ''}"></span>Publishing</span><b>${esc(h.publishMode)}</b></div>
     <div class="mode-pill"><span>Scheduler</span><b>every ${Math.round(h.worker.intervalMs / 1000)}s</b></div>
-    <div class="theme-switch" title="App theme">${[['classic', 'Classic'], ['nuance', 'Nuance']].map(([k, l]) => `<button data-action="set-theme" data-v="${k}" class="${(document.documentElement.dataset.theme || 'classic') === k ? 'on' : ''}">${l}</button>`).join('')}</div>`;
+    <div class="theme-switch" title="App theme">${[['classic', 'Classic'], ['nuance', 'Nuance']].map(([k, l]) => `<button data-action="set-theme" data-v="${k}" class="${(document.documentElement.dataset.theme || 'nuance') === k ? 'on' : ''}">${l}</button>`).join('')}</div>`;
 }
 function renderSelectors() {
   $('#wsSelect').innerHTML = S.workspaces.map((w) => `<option value="${w.id}" ${w.id === S.wsId ? 'selected' : ''}>${esc(w.name)}</option>`).join('');

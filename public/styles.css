@@ -279,3 +279,10 @@ ul.clean li { margin: 3px 0; }
 .scene-thumb img { width: 100%; height: 100%; }
 
 .save-bar { position: sticky; bottom: 0; margin: 18px -18px -18px; padding: 12px 18px; background: rgba(255, 253, 249, 0.96); border-top: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 12px; border-radius: 0 0 var(--r) var(--r); backdrop-filter: blur(4px); z-index: 5; }
+
+/* Logo */
+.brand { text-decoration: none; padding: 0 6px 18px; }
+.brand .logo { height: 78px; max-width: 100%; object-fit: contain; object-position: left; width: auto; display: block; }
+.brand .logo-on-light { display: none; }
+html[data-theme='nuance'] .brand .logo-on-light { display: block; }
+html[data-theme='nuance'] .brand .logo-on-dark { display: none; }
