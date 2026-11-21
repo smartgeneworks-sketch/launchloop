@@ -6,6 +6,7 @@ import crypto from 'node:crypto';
 import { CHANNELS, TASK_CATEGORIES, specsFor } from '../lib/channels.js';
 import { HttpError, addDays, id, isoDate, nowIso, slugify, timingSafeEqualStr } from '../lib/util.js';
 import { ingestUrl } from './ingest.js';
+import { stripLinkTokens } from './ai.js';
 import { scoreAsset } from './scorer.js';
 import { LOCKED_STATES, REPLACEABLE_STATES, transition } from './stateMachine.js';
 import { assetUtmUrl, parseUtmContent } from './utm.js';
@@ -286,7 +287,7 @@ export function editAsset({ db }, assetId, patch = {}) {
   for (const k of EDITABLE) if (k in patch) out[k] = patch[k];
   if ('auto_publish' in patch) out.auto_publish = !!patch.auto_publish;
   if (typeof out.hashtags === 'string') out.hashtags = out.hashtags.split(/[\s,]+/).filter(Boolean).map((h) => '#' + h.replace(/^#/, ''));
-  if (out.content) out.content = { ...asset.content, ...out.content };
+  if (out.content) out.content = stripLinkTokens({ ...asset.content, ...out.content });
   const contentChanged = EDITABLE.some((k) => k in out && JSON.stringify(out[k]) !== JSON.stringify(asset[k]));
   const campaign = db.byId('campaigns', asset.campaign_id);
   const workspace = db.byId('workspaces', campaign.workspace_id);

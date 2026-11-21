@@ -7,6 +7,7 @@
  */
 import { ASPECTS } from '../lib/channels.js';
 import { escapeXml as x, wrapText } from '../lib/util.js';
+import { stripLinkTokens } from './ai.js';
 
 const DEFAULT_COLORS = { primary: '#1F2A44', secondary: '#3B4C7A', accent: '#FFB547' };
 
@@ -214,14 +215,16 @@ export function renderVideoPreviewSvg(asset, workspace) {
   <rect x="0" y="${H - 10}" width="0" height="10" fill="${t.accent}"><animate attributeName="width" from="0" to="${W}" dur="${D}s" repeatCount="indefinite"/></rect></svg>`;
 }
 
-export function renderAssetSvg(asset, workspace, { slide = 0 } = {}) {
+export function renderAssetSvg(rawAsset, workspace, { slide = 0 } = {}) {
+  const asset = { ...rawAsset, headline: String(rawAsset.headline || '').replace(/\s*\{\{\s*link\s*\}\}\s*/gi, ' ').trim(), content: stripLinkTokens(rawAsset.content || {}) };
   if (asset.format === 'reel' || asset.format === 'video') return renderVideoPreviewSvg(asset, workspace);
   if (asset.format === 'carousel') return renderSlideSvg(asset, workspace, slide);
   return renderImageSvg(asset, workspace);
 }
 
 /** Renderer-agnostic video render job. Feed it to Remotion / FFmpeg / a render API. */
-export function buildRenderJob(asset, workspace, { publicBaseUrl = '' } = {}) {
+export function buildRenderJob(rawAsset, workspace, { publicBaseUrl = '' } = {}) {
+  const asset = { ...rawAsset, content: stripLinkTokens(rawAsset.content || {}) };
   const [W, H] = size(asset.aspect_ratio);
   const c = asset.content || {};
   const t = theme(workspace);

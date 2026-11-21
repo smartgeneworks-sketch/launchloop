@@ -142,6 +142,7 @@ async function refreshCampaign() {
   return changed;
 }
 async function poll() {
+  if (!document.hidden) refreshHealth();
   if (!S.cmpId || document.hidden || $('#modal-root').children.length) return;
   const active = document.activeElement;
   if (active && ['INPUT', 'TEXTAREA', 'SELECT'].includes(active.tagName) && $('#view').contains(active)) return;
@@ -152,10 +153,18 @@ async function poll() {
   if (['dashboard', 'review', 'timeline', 'analytics', 'studio'].includes(route())) render();
 }
 
+async function refreshHealth() {
+  try {
+    S.health = await api('GET', '/api/health');
+    renderModes();
+  } catch {}
+}
 function renderModes() {
   const h = S.health;
+  const err = h.ai.lastError;
   $('#modes').innerHTML = `
-    <div class="mode-pill"><span><span class="dot ${h.ai.provider !== 'mock' ? 'live' : ''}"></span>AI</span><b>${esc(h.ai.provider)}${h.ai.model ? ' · ' + esc(h.ai.model) : ''}</b></div>
+    <div class="mode-pill"><span><span class="dot ${err ? 'bad' : h.ai.provider !== 'mock' ? 'live' : ''}"></span>AI</span><b>${esc(h.ai.provider)}${h.ai.model ? ' · ' + esc(h.ai.model) : ''}</b></div>
+    ${err ? `<div class="ai-warn" title="${esc(err.message)}">⚠ AI request failed (${esc(err.message)}) — creatives fell back to templates. ${esc(err.hint || '')}</div>` : ''}
     <div class="mode-pill"><span><span class="dot ${h.publishMode === 'live' ? 'live' : ''}"></span>Publishing</span><b>${esc(h.publishMode)}</b></div>
     <div class="mode-pill"><span>Scheduler</span><b>every ${Math.round(h.worker.intervalMs / 1000)}s</b></div>`;
 }
@@ -333,7 +342,8 @@ function assetCard(a) {
   return `<div class="asset">
     <div class="thumb" data-action="open-asset" data-id="${a.id}"><img loading="lazy" src="${mediaUrl(a)}" alt=""><span class="fmt">${esc(ch(a.channel).label)} · ${esc(fmtLabel(a.format))} · ${esc(a.aspect_ratio)}${n}</span></div>
     <div class="body"><div class="name">${esc(a.title)}</div><div class="meta">${badge(a.state)}${scorePill(a.score)}</div>
-    ${a.parent_id ? `<div class="muted small">↳ variation · v${a.version}</div>` : `<div class="muted small">v${a.version} · ${esc((a.generator || '').split(' ')[0])}</div>`}</div>
+    ${a.parent_id ? `<div class="muted small">↳ variation · v${a.version}</div>` : `<div class="muted small">v${a.version} · ${esc((a.generator || '').split(' ')[0])}</div>`}
+    ${/fallback/.test(a.generator || '') ? `<div class="fallback-badge" title="${esc(a.generator)}">⚠ AI failed — template copy. Regenerate after fixing.</div>` : ''}</div>
     <div class="actions"><button class="btn sm" data-action="open-asset" data-id="${a.id}">Open</button>
     ${a.state === 'DRAFT' ? `<button class="btn ghost sm" data-action="transition" data-to="NEEDS_REVIEW" data-id="${a.id}">Submit</button>` : ''}
     ${a.state !== 'PUBLISHED' ? `<button class="btn ghost sm" data-action="regenerate" data-id="${a.id}" title="${['APPROVED', 'SCHEDULED', 'FAILED'].includes(a.state) ? 'Creates a new draft variant; this one stays untouched' : 'Regenerate in place'}">↻ ${['APPROVED', 'SCHEDULED', 'FAILED'].includes(a.state) ? 'Variant' : 'Regenerate'}</button>` : `<button class="btn ghost sm" data-action="regenerate" data-id="${a.id}">↻ Variant</button>`}</div>
@@ -498,6 +508,7 @@ async function openAsset(assetId, slide = 0) {
     <div><div class="pv"><img src="${mediaUrl(a, slide)}" alt="preview"></div>
       ${slides ? `<div class="row" style="justify-content:center;margin-top:8px">${Array.from({ length: slides }, (_, i) => `<button class="chip ${i === slide ? 'on' : ''}" data-action="slide" data-id="${a.id}" data-i="${i}">${i + 1}</button>`).join('')}</div>` : ''}
       <div class="row" style="justify-content:center;margin-top:10px"><a class="btn ghost sm" href="${mediaUrl(a, slide)}" download="${a.channel}-${a.format}.svg">Download SVG</a><button class="btn ghost sm" data-action="png" data-src="${mediaUrl(a, slide)}" data-name="${a.channel}-${a.format}-${slide + 1}.png">Download PNG</button><button class="btn signal sm" data-action="share-kit" data-id="${a.id}">Share Kit</button></div>
+      ${a.format === 'reel' || a.format === 'video' ? `<div class="row" style="justify-content:center;margin-top:8px"><button class="btn sm" data-action="record-video" data-id="${a.id}">🎬 Download video (${c.durationSec || ''}s)</button></div><p class="muted small" style="text-align:center;margin:6px 0 0">Records in real time — keep this tab open and visible. Silent, with burned-in captions; add music/voice in the app you post from.</p>` : ''}
       <div class="card" style="margin-top:14px"><div class="card-head" style="margin-bottom:8px"><h3 style="margin:0">Hook & virality advisor</h3><button class="link small" data-action="rescore" data-id="${a.id}">Re-score</button></div>
         ${Object.entries({ hook: 'Hook clarity', showDontTell: 'Show-don’t-tell', shareability: 'Shareability', cta: 'CTA & link' }).map(([k, l]) => `<div class="dim"><span>${l}</span><div class="bar ${sc.dims?.[k] >= 70 ? 'ok' : 'signal'}"><i style="width:${sc.dims?.[k] || 0}%"></i></div><span class="mono">${sc.dims?.[k] ?? '–'}</span></div>`).join('')}
         <div style="margin:8px 0">${(sc.tags || []).map((t) => `<span class="tag">${esc(t)}</span>`).join('')}</div>
@@ -533,7 +544,7 @@ async function openShareKit(assetId) {
   <div class="modal-body stack">
     <div class="muted small">${esc(k.requirements)}</div>
     <div><div class="eyebrow">1 · Media (pre-sized ${esc(k.media[0]?.aspect)})</div><div class="kit-media">${k.media.map((m, i) => `<figure><img src="${m.svg}" alt=""><div class="row" style="justify-content:space-between"><span class="small">${esc(m.label)}</span><span class="row" style="gap:4px"><a class="btn ghost xs" href="${m.svg}" download="${k.channel}-${i + 1}.svg">SVG</a><button class="btn ghost xs" data-action="png" data-src="${m.svg}" data-name="${k.channel}-${i + 1}.png">PNG</button></span></div></figure>`).join('')}</div>
-      ${k.renderJob ? `<div class="row small" style="margin-top:6px"><button class="link" data-action="render-job" data-id="${k.assetId}">Video render job (JSON)</button><span class="muted">— render to MP4, or film it following the storyboard.</span></div>` : ''}</div>
+      ${k.renderJob ? `<div class="row small" style="margin-top:6px"><button class="btn sm" data-action="record-video" data-id="${k.assetId}">🎬 Download video</button><button class="link" data-action="render-job" data-id="${k.assetId}">Video render job (JSON)</button><span class="muted">— render to MP4, or film it following the storyboard.</span></div>` : ''}</div>
     <div><div class="spread"><div class="eyebrow">2 · Caption</div><span class="counter ${k.overLimit ? 'over' : ''}">${k.captionLength} / ${k.captionLimit}</span></div><textarea rows="7" readonly id="kitCaption">${esc(k.caption)}</textarea><div class="row" style="margin-top:6px"><button class="btn sm" data-copy-el="kitCaption">Copy caption</button></div></div>
     <div><div class="eyebrow">3 · Tracked link</div><div class="copybox"><input type="text" readonly value="${esc(k.link)}"><button class="btn ghost sm" data-copy="${esc(k.link)}">Copy</button></div></div>
     <div><div class="eyebrow">4 · Checklist</div>${k.checklist.map((s) => `<label class="check" style="display:flex;margin:6px 0"><input type="checkbox"> ${esc(s)}</label>`).join('')}</div>
@@ -597,6 +608,8 @@ const actions = {
     const r = await busy(el, () => api('POST', `/api/assets/${el.dataset.id}/regenerate`, { instruction }));
     toast(r.mode === 'variant' ? 'Created a new draft variant — the approved original is untouched' : `Regenerated (v${r.asset.version})`, 'ok');
     await refreshCampaign();
+    await refreshHealth();
+    warnIfFallback([r.asset.id]);
     render();
     if (el.dataset.modal) openAsset(r.asset.id);
   },
@@ -656,6 +669,20 @@ const actions = {
   },
   async png(el) {
     await svgToPng(el.dataset.src, el.dataset.name);
+  },
+  async 'record-video'(el) {
+    if (el.classList.contains('busy')) return;
+    const label = el.textContent;
+    el.classList.add('busy');
+    try {
+      const name = await recordVideo(el.dataset.id, (txt) => (el.textContent = txt));
+      toast(`Video saved: ${name}`, 'ok');
+    } catch (e) {
+      toast(e.message, 'bad');
+    } finally {
+      el.classList.remove('busy');
+      el.textContent = label;
+    }
   },
   'add-metrics'(el) {
     const id = el.dataset.id;
@@ -722,6 +749,10 @@ const actions = {
   },
 };
 
+function warnIfFallback(ids) {
+  const failed = S.assets.filter((a) => ids.includes(a.id) && /fallback/.test(a.generator || ''));
+  if (failed.length) toast(`⚠ ${failed.length} creative(s) used template copy because the AI request failed (${failed[0].generator.replace(/^mock \(fallback: |\)$/g, '')}). ${S.health?.ai?.lastError?.hint || ''}`, 'bad');
+}
 async function afterAssetChange(id) {
   await refreshCampaign();
   render();
@@ -770,6 +801,8 @@ const forms = {
     const r = await busy(btn, () => api('POST', `/api/campaigns/${S.cmpId}/generate`, body));
     toast(`${r.created.length} new · ${r.replaced.length} drafts refreshed · ${r.skippedLocked.length} locked kept`, 'ok');
     await refreshCampaign();
+    await refreshHealth();
+    warnIfFallback([...r.created, ...r.replaced]);
     render();
   },
   async 'edit-asset'(f, fd, btn) {
@@ -862,6 +895,245 @@ async function svgToPng(src, name) {
     a.click();
   }, 'image/png');
 }
+// ------------------------------------------------------------------ video recorder (canvas → MediaRecorder)
+const loadImg = (src) =>
+  new Promise((res) => {
+    const i = new Image();
+    i.onload = () => res(i);
+    i.onerror = () => res(null);
+    i.src = src;
+  });
+const unlink = (t) => String(t || '').replace(/\s*\{\{\s*link\s*\}\}\s*/gi, ' ').replace(/\s{2,}/g, ' ').trim();
+function wrapCanvas(ctx, text, maxW) {
+  const words = unlink(text).split(/\s+/).filter(Boolean);
+  const lines = [];
+  let line = '';
+  for (const w of words) {
+    const test = line ? line + ' ' + w : w;
+    if (ctx.measureText(test).width > maxW && line) {
+      lines.push(line);
+      line = w;
+    } else line = test;
+  }
+  if (line) lines.push(line);
+  return lines;
+}
+function rrect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+const lum = (hex) => {
+  const n = parseInt(String(hex || '#000').replace('#', '').padEnd(6, '0').slice(0, 6), 16);
+  const [r, g, b] = [(n >> 16) & 255, (n >> 8) & 255, n & 255].map((v) => ((v /= 255) <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+};
+const ease = (x) => 1 - Math.pow(1 - Math.min(1, Math.max(0, x)), 3);
+
+async function recordVideo(assetId, onProgress) {
+  if (!window.MediaRecorder || !HTMLCanvasElement.prototype.captureStream) throw new Error('This browser cannot record video. Use Chrome or Edge on a computer.');
+  const mime = ['video/mp4;codecs=avc1.42E01E', 'video/mp4;codecs=avc1', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm'].find((m) => MediaRecorder.isTypeSupported(m));
+  if (!mime) throw new Error('No supported video format in this browser. Use Chrome or Edge.');
+  const a = await api('GET', `/api/assets/${assetId}`);
+  const c = a.content || {};
+  const sb = (c.storyboard || []).slice().sort((x, y) => x.start - y.start);
+  if (!sb.length) throw new Error('This creative has no storyboard to record.');
+  const D = c.durationSec || sb.at(-1).end;
+  const [W, H] = { '9:16': [1080, 1920], '1:1': [1080, 1080], '4:5': [1080, 1350], '16:9': [1920, 1080], '1.91:1': [1200, 628] }[a.aspect_ratio] || [1080, 1920];
+  const M = Math.min(W, H);
+  const vertical = H > W;
+  const brand = S.ws.brand || {};
+  const col = { primary: '#1F2A44', secondary: '#3B4C7A', accent: '#FFB547', ...(brand.colors || {}) };
+  const fg = lum(col.primary) > 0.45 ? '#111418' : '#FFFFFF';
+  const onAccent = lum(col.accent) > 0.45 ? '#111418' : '#FFFFFF';
+  const hFont = `'${brand.fonts?.heading || 'Inter'}', Inter, 'Helvetica Neue', Arial, sans-serif`;
+  const bFont = `'${brand.fonts?.body || 'Inter'}', Inter, 'Helvetica Neue', Arial, sans-serif`;
+  const logo = brand.logo ? await loadImg(brand.logo) : null;
+  const shots = (await Promise.all((S.ws.screenshots || []).map((x) => loadImg(x.dataUrl)))).filter(Boolean);
+  let domain = '';
+  try {
+    domain = new URL(S.campaign?.base_url || S.ws.website_url).hostname.replace(/^www\./, '');
+  } catch {}
+
+  const canvas = Object.assign(document.createElement('canvas'), { width: W, height: H });
+  const ctx = canvas.getContext('2d');
+  const pad = M * 0.07;
+
+  function draw(t) {
+    const idx = Math.max(0, sb.findIndex((s) => t >= s.start && t < s.end));
+    const s = t >= D ? sb.at(-1) : sb[idx];
+    const p = (t - s.start) / Math.max(0.1, s.end - s.start);
+    const enter = ease((t - s.start) / 0.45);
+    // background
+    const g = ctx.createLinearGradient(0, 0, W, H);
+    g.addColorStop(0, col.primary);
+    g.addColorStop(1, col.secondary);
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+    ctx.globalAlpha = 0.1;
+    ctx.fillStyle = col.accent;
+    ctx.beginPath();
+    ctx.arc(W * 0.9 - t * 4, H * 0.86, M * 0.34, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 0.05;
+    ctx.fillStyle = '#fff';
+    ctx.beginPath();
+    ctx.arc(W * 0.06 + t * 3, H * 0.06, M * 0.2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    // logo
+    const lh = M * 0.065;
+    if (logo) ctx.drawImage(logo, pad, pad, (logo.width / logo.height) * lh, lh);
+    else {
+      ctx.fillStyle = fg;
+      ctx.font = `800 ${lh * 0.7}px ${hFont}`;
+      ctx.textBaseline = 'middle';
+      ctx.fillText(S.ws.name || '', pad, pad + lh / 2);
+    }
+    let y = pad + lh + M * 0.05;
+    // headline
+    const isCta = s.type === 'cta';
+    const fs = vertical ? W * 0.082 : H * 0.085;
+    ctx.font = `800 ${fs}px ${hFont}`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'alphabetic';
+    const lines = wrapCanvas(ctx, s.onScreenText, W - pad * 2).slice(0, vertical ? 5 : 3);
+    ctx.globalAlpha = enter;
+    ctx.fillStyle = fg;
+    const headTop = y + (1 - enter) * fs * 0.6 + fs;
+    lines.forEach((l, i) => ctx.fillText(l, W / 2, headTop + i * fs * 1.08));
+    ctx.globalAlpha = 1;
+    y = headTop + (lines.length - 1) * fs * 1.08 + fs * 0.6;
+    // subtitle box size (bottom)
+    const sfs = vertical ? W * 0.038 : H * 0.042;
+    ctx.font = `600 ${sfs}px ${bFont}`;
+    const sub = wrapCanvas(ctx, s.vo, W - pad * 2.6).slice(0, 3);
+    const subH = sub.length * sfs * 1.35 + sfs * 0.9;
+    const subY = H - pad * 1.3 - subH;
+    // media area
+    const areaH = subY - y - pad * 0.5;
+    const shot = shots.length ? shots[idx % shots.length] : null;
+    if (isCta) {
+      let cfs = M * 0.052;
+      const label = unlink(a.cta).replace(/\s*\(link in bio\)/i, '') + ' →';
+      ctx.font = `800 ${cfs}px ${bFont}`;
+      while (ctx.measureText(label).width + cfs * 2.4 > W - pad * 2 && cfs > M * 0.026) {
+        cfs *= 0.92;
+        ctx.font = `800 ${cfs}px ${bFont}`;
+      }
+      const bw = ctx.measureText(label).width + cfs * 2.4;
+      const bh = cfs * 2.3;
+      const by = y + areaH / 2 - bh;
+      const pulse = 1 + Math.sin(t * 5) * 0.02;
+      ctx.save();
+      ctx.translate(W / 2, by + bh / 2);
+      ctx.scale(pulse, pulse);
+      ctx.fillStyle = col.accent;
+      rrect(ctx, -bw / 2, -bh / 2, bw, bh, bh / 2);
+      ctx.fill();
+      ctx.fillStyle = onAccent;
+      ctx.textBaseline = 'middle';
+      ctx.fillText(label, 0, 0);
+      ctx.restore();
+      if (domain) {
+        ctx.fillStyle = fg;
+        ctx.globalAlpha = 0.85;
+        ctx.font = `600 ${M * 0.04}px ${bFont}`;
+        ctx.textBaseline = 'alphabetic';
+        ctx.fillText(/link in bio/i.test(a.cta) ? 'Link in bio' : domain, W / 2, by + bh + M * 0.09);
+        ctx.globalAlpha = 1;
+      }
+    } else if (areaH > M * 0.15) {
+      const fw = W - pad * 2;
+      const fx = pad;
+      const fh = areaH;
+      const fy = y;
+      ctx.save();
+      rrect(ctx, fx, fy, fw, fh, M * 0.025);
+      ctx.clip();
+      if (shot) {
+        if (s.type === 'hook') ctx.filter = 'blur(6px) brightness(0.55)';
+        const zoom = 1 + 0.08 * p;
+        const scale = Math.max(fw / shot.width, fh / shot.height) * zoom;
+        const iw = shot.width * scale;
+        const ih = shot.height * scale;
+        if (s.type === 'problem') ctx.filter = 'grayscale(0.85) brightness(0.8)';
+        ctx.drawImage(shot, fx + (fw - iw) / 2, fy + (fh - ih) * 0.2, iw, ih);
+        ctx.filter = 'none';
+        if (s.type === 'proof') {
+          ctx.font = `800 ${M * 0.036}px ${bFont}`;
+          ctx.textAlign = 'left';
+          ctx.textBaseline = 'middle';
+          const tw = ctx.measureText('BEFORE → AFTER').width;
+          ctx.fillStyle = col.accent;
+          rrect(ctx, fx + M * 0.025, fy + M * 0.025, tw + M * 0.05, M * 0.065, M * 0.0325);
+          ctx.fill();
+          ctx.fillStyle = onAccent;
+          ctx.fillText('BEFORE → AFTER', fx + M * 0.05, fy + M * 0.025 + M * 0.0325);
+          ctx.textAlign = 'center';
+        }
+      } else {
+        // No screenshot uploaded: animated brand shapes instead of director notes.
+        ctx.fillStyle = 'rgba(0,0,0,0.18)';
+        ctx.fillRect(fx, fy, fw, fh);
+        ctx.fillStyle = col.accent;
+        for (let k = 0; k < 3; k++) {
+          ctx.globalAlpha = 0.25 + 0.2 * k;
+          ctx.beginPath();
+          ctx.arc(fx + fw * (0.3 + 0.2 * k), fy + fh / 2 + Math.sin(t * 2 + k) * fh * 0.08, M * (0.05 + 0.02 * k), 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.globalAlpha = 1;
+      }
+      ctx.restore();
+    }
+    // subtitles
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    rrect(ctx, pad, subY, W - pad * 2, subH, M * 0.02);
+    ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.font = `600 ${sfs}px ${bFont}`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'alphabetic';
+    sub.forEach((l, i) => ctx.fillText(l, W / 2, subY + sfs * 1.2 + i * sfs * 1.35));
+    // progress
+    ctx.fillStyle = col.accent;
+    ctx.fillRect(0, H - M * 0.012, (W * Math.min(t, D)) / D, M * 0.012);
+  }
+
+  const stream = canvas.captureStream(30);
+  const rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 8_000_000 });
+  const chunks = [];
+  rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+  const stopped = new Promise((r) => (rec.onstop = r));
+  draw(0);
+  rec.start(500);
+  const t0 = performance.now();
+  await new Promise((resolve) => {
+    const tick = () => {
+      const t = (performance.now() - t0) / 1000;
+      draw(Math.min(t, D));
+      onProgress?.(`Recording… ${Math.max(0, Math.ceil(D - t))}s left`);
+      if (t >= D + 0.3) return resolve();
+      setTimeout(tick, 1000 / 30);
+    };
+    tick();
+  });
+  rec.stop();
+  await stopped;
+  stream.getTracks().forEach((tr) => tr.stop());
+  const ext = mime.startsWith('video/mp4') ? 'mp4' : 'webm';
+  const name = `${(S.ws.name || 'video').replace(/[^a-z0-9]+/gi, '-').toLowerCase()}-${a.channel}-${a.format}.${ext}`;
+  const link = Object.assign(document.createElement('a'), { href: URL.createObjectURL(new Blob(chunks, { type: mime.split(';')[0] })), download: name });
+  link.click();
+  if (ext === 'webm') toast('Saved as WebM — this browser cannot record MP4. Convert it (e.g. in CapCut) before uploading to Instagram.', 'bad');
+  return name;
+}
+
 const readFile = (file) =>
   new Promise((res, rej) => {
     const r = new FileReader();

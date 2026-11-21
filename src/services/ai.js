@@ -12,7 +12,7 @@ import { defaultTasks } from './tasks.js';
 const SYSTEM = `You are a senior growth marketer and copywriter for software launches.
 Rules: only use facts provided about the product; never invent statistics, user counts, testimonials, awards or prices.
 Write short, concrete, platform-native copy. Hooks must land in under 3 seconds (≤12 words), show the workflow rather than describe it, and include a share mechanic (template, before/after, referral/invite prompt, or community reply prompt).
-Use the token {{link}} wherever the tracked URL should go (never write a raw URL). Always respond with a single JSON object and nothing else.`;
+Use the token {{link}} wherever the tracked URL should go in the caption only (never write a raw URL). Never put {{link}} or any URL in on-screen text, voiceover, storyboard, script, slides or image headlines — on video, say "link in bio" or show the domain instead. Always respond with a single JSON object and nothing else.`;
 
 export class AIService {
   constructor(env = process.env, { fetchImpl = globalThis.fetch } = {}) {
@@ -33,7 +33,7 @@ export class AIService {
   }
 
   info() {
-    return { provider: this.provider, model: this.provider === 'mock' ? null : this.models[this.provider], imageGeneration: this.imageGeneration };
+    return { provider: this.provider, model: this.provider === 'mock' ? null : this.models[this.provider], imageGeneration: this.imageGeneration, lastError: this.lastError || null, lastSuccessAt: this.lastSuccessAt || null };
   }
 
   // ------------------------------------------------------------- transport
@@ -77,9 +77,12 @@ export class AIService {
     if (this.provider === 'mock') return { ...fallback(), generator: 'mock' };
     try {
       const out = await fn();
+      this.lastSuccessAt = new Date().toISOString();
+      this.lastError = null;
       return { ...out, generator: `${this.provider}:${this.models[this.provider]}` };
     } catch (e) {
       console.warn(`[ai] ${this.provider} failed (${e.message}); using mock output`);
+      this.lastError = { at: new Date().toISOString(), message: e.message, hint: aiErrorHint(e.message, this.provider) };
       return { ...fallback(), generator: `mock (fallback: ${e.message})` };
     }
   }
@@ -180,6 +183,29 @@ Checklist: ${JSON.stringify(base().tasks.map(({ title, category, role, dayOffset
 }
 
 // ------------------------------------------------------------- helpers
+export function aiErrorHint(msg, provider) {
+  const key = provider === 'gemini' ? 'GEMINI' : 'OPENAI';
+  if (/\b404\b/.test(msg)) return `Model not found — set ${key}_MODEL to a model your key can use.`;
+  if (/\b429\b/.test(msg)) return 'Quota or rate limit reached — wait, or enable billing on the provider account.';
+  if (/\b(400|401|403)\b/.test(msg)) return `The API key was rejected — check ${key}_API_KEY.`;
+  return 'Temporary error — try Regenerate.';
+}
+const LINK_RE = /\s*\{\{\s*link\s*\}\}\s*/gi;
+const noLink = (v) => (typeof v === 'string' ? v.replace(LINK_RE, ' ').replace(/\s{2,}/g, ' ').trim() : v);
+/** {{link}} belongs in captions only — strip it from anything rendered on screen or spoken. */
+export function stripLinkTokens(content) {
+  const c = { ...content };
+  for (const k of ['hook', 'imageHeadline', 'imageSub', 'subhead', 'badge', 'voiceover']) c[k] = noLink(c[k]);
+  if (Array.isArray(c.storyboard)) c.storyboard = c.storyboard.map((s) => ({ ...s, onScreenText: noLink(s.onScreenText), vo: noLink(s.vo) }));
+  if (Array.isArray(c.captions)) c.captions = c.captions.map((s) => ({ ...s, text: noLink(s.text) }));
+  if (Array.isArray(c.slides)) c.slides = c.slides.map((s) => ({ ...s, title: noLink(s.title), body: noLink(s.body) }));
+  if (Array.isArray(c.valueProps)) c.valueProps = c.valueProps.map(noLink);
+  if (c.script) {
+    const fix = (b) => b && { ...b, vo: noLink(b.vo), onScreen: noLink(b.onScreen) };
+    c.script = { hook: fix(c.script.hook), body: (c.script.body || []).map(fix), cta: fix(c.script.cta) };
+  }
+  return c;
+}
 function parseJson(text) {
   const t = String(text).trim().replace(/^```(?:json)?\s*|\s*```$/g, '');
   try {
@@ -211,10 +237,10 @@ export function normalizeAsset(out, mock, format, channel) {
     .slice(0, ch.hashtagLimit);
   return {
     title: out.title || mock.title,
-    headline: out.headline || mock.headline,
+    headline: noLink(out.headline || mock.headline),
     caption,
     cta: out.cta || mock.cta,
     hashtags,
-    content,
+    content: stripLinkTokens(content),
   };
 }
