@@ -2,6 +2,7 @@ FROM node:22-alpine
 ENV NODE_ENV=production \
     PORT=3000 \
     DATA_DIR=/data
+RUN apk add --no-cache ffmpeg
 WORKDIR /app
 COPY package.json ./
 COPY src ./src

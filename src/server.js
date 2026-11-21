@@ -1,7 +1,9 @@
 /**
  * LaunchLoop HTTP server — zero dependencies (Node ≥ 22.5: node:http + node:sqlite).
  */
+import { spawn } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -14,6 +16,7 @@ import * as core from './services/core.js';
 import { buildRenderJob, renderAssetSvg } from './services/media.js';
 import { Publisher } from './services/publisher.js';
 import { scoreAsset } from './services/scorer.js';
+import { TTSService, assetVoiceover } from './services/tts.js';
 import { STATES, allowedNext } from './services/stateMachine.js';
 import { buildUtmUrl } from './services/utm.js';
 import { createWorker } from './worker.js';
@@ -23,7 +26,7 @@ const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.json': 'application/json' };
 const MAX_BODY = 6 * 1024 * 1024;
 
-export function createApp({ db, ai, config, publisher, worker }) {
+export function createApp({ db, ai, config, publisher, worker, tts = new TTSService(config.env, { dataDir: config.dataDir }) }) {
   const ctx = { db, ai, config };
   const routes = [];
   const on = (method, pattern, handler, opts = {}) => {
@@ -38,7 +41,7 @@ export function createApp({ db, ai, config, publisher, worker }) {
   const withAllowed = (a) => a && { ...a, allowed_next: allowedNext(a.state) };
 
   // ---------------------------------------------------------------- meta
-  on('GET', '/api/health', () => ({ ok: true, ai: ai.info(), publishMode: publisher.mode, worker: { intervalMs: config.workerIntervalMs, ...worker?.state }, authRequired: !!config.appApiToken }), { public: true });
+  on('GET', '/api/health', () => ({ ok: true, ai: ai.info(), publishMode: publisher.mode, worker: { intervalMs: config.workerIntervalMs, ...worker?.state }, authRequired: !!config.appApiToken, tts: { available: tts.info().available, model: tts.info().model, lastError: tts.lastError } }), { public: true });
   on('GET', '/api/config', () => ({ channels: CHANNELS, formats: FORMATS, states: STATES, taskCategories: TASK_CATEGORIES, publicBaseUrl: config.publicBaseUrl }));
   on('POST', '/api/worker/tick', async () => worker.tick());
 
@@ -107,6 +110,34 @@ export function createApp({ db, ai, config, publisher, worker }) {
     const ws = db.get('workspaces', 'SELECT w.* FROM workspaces w JOIN campaigns c ON c.workspace_id = w.id WHERE c.id = ?', a.campaign_id);
     return db.update('creative_assets', a.id, { score: scoreAsset(a, ws) }).score;
   });
+  on('GET', '/api/tts', () => tts.info());
+  on('POST', '/api/assets/:id/voiceover', async ({ p, body }) => {
+    const a = must(db.byId('creative_assets', p.id), 'Asset');
+    if (!['reel', 'video'].includes(a.format)) throw new HttpError(400, 'Voiceover is only for reels and short videos');
+    return assetVoiceover(tts, a, { voice: body.voice || 'Puck', style: String(body.style || '').slice(0, 80) });
+  });
+  // Convert a browser recording (WebM / VP9 / Opus) to a universally accepted H.264 + AAC MP4.
+  on('POST', '/api/transcode', async ({ rawBody, res }) => {
+    if (!rawBody?.length) throw new HttpError(400, 'Send the video file as the request body');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'll-'));
+    const input = path.join(dir, 'in');
+    const output = path.join(dir, 'out.mp4');
+    fs.writeFileSync(input, rawBody);
+    try {
+      await new Promise((resolve, reject) => {
+        const ff = spawn('ffmpeg', ['-y', '-v', 'error', '-i', input, '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '21', '-pix_fmt', 'yuv420p', '-r', '30', '-c:a', 'aac', '-b:a', '192k', '-ar', '48000', '-movflags', '+faststart', output]);
+        let err = '';
+        ff.stderr.on('data', (d) => (err += d));
+        ff.on('error', () => reject(new HttpError(501, 'ffmpeg is not installed on the server')));
+        ff.on('close', (code) => (code === 0 ? resolve() : reject(new HttpError(500, `Conversion failed: ${err.slice(-300)}`))));
+      });
+      const out = fs.readFileSync(output);
+      res.writeHead(200, { 'content-type': 'video/mp4', 'content-length': out.length });
+      res.end(out);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }, { raw: true, binary: true, maxBody: 150 * 1024 * 1024 });
   on('GET', '/api/assets/:id/share-kit', ({ p }) => core.shareKit(ctx, p.id));
   on('GET', '/api/assets/:id/render-job', ({ p }) => {
     const a = must(db.byId('creative_assets', p.id), 'Asset');
@@ -147,15 +178,15 @@ export function createApp({ db, ai, config, publisher, worker }) {
   on('GET', '/api/workspaces/:id/webhook-events', ({ p }) => db.all('webhook_events', 'SELECT * FROM webhook_events WHERE workspace_id = ? ORDER BY received_at DESC LIMIT 20', p.id));
 
   // ---------------------------------------------------------------- request handling
-  async function readBody(req) {
+  async function readBody(req, max = MAX_BODY) {
     const chunks = [];
     let size = 0;
     for await (const c of req) {
       size += c.length;
-      if (size > MAX_BODY) throw new HttpError(413, 'Request body too large');
+      if (size > max) throw new HttpError(413, 'Request body too large');
       chunks.push(c);
     }
-    return Buffer.concat(chunks).toString('utf8');
+    return Buffer.concat(chunks);
   }
 
   function serveStatic(req, res, pathname) {
@@ -186,9 +217,10 @@ export function createApp({ db, ai, config, publisher, worker }) {
       }
       const m = pathname.match(route.re);
       const p = Object.fromEntries(route.keys.map((k, i) => [k, decodeURIComponent(m[i + 1])]));
-      const rawBody = ['POST', 'PATCH', 'PUT'].includes(req.method) ? await readBody(req) : '';
+      const rawBuf = ['POST', 'PATCH', 'PUT'].includes(req.method) ? await readBody(req, route.maxBody) : Buffer.alloc(0);
+      const rawBody = route.binary ? rawBuf : rawBuf.toString('utf8');
       let body = {};
-      if (rawBody && !route.rawBody) {
+      if (rawBody && !route.rawBody && !route.binary) {
         try {
           body = JSON.parse(rawBody);
         } catch {

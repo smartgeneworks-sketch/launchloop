@@ -508,7 +508,7 @@ async function openAsset(assetId, slide = 0) {
     <div><div class="pv"><img src="${mediaUrl(a, slide)}" alt="preview"></div>
       ${slides ? `<div class="row" style="justify-content:center;margin-top:8px">${Array.from({ length: slides }, (_, i) => `<button class="chip ${i === slide ? 'on' : ''}" data-action="slide" data-id="${a.id}" data-i="${i}">${i + 1}</button>`).join('')}</div>` : ''}
       <div class="row" style="justify-content:center;margin-top:10px"><a class="btn ghost sm" href="${mediaUrl(a, slide)}" download="${a.channel}-${a.format}.svg">Download SVG</a><button class="btn ghost sm" data-action="png" data-src="${mediaUrl(a, slide)}" data-name="${a.channel}-${a.format}-${slide + 1}.png">Download PNG</button><button class="btn signal sm" data-action="share-kit" data-id="${a.id}">Share Kit</button></div>
-      ${a.format === 'reel' || a.format === 'video' ? `<div class="row" style="justify-content:center;margin-top:8px"><button class="btn sm" data-action="record-video" data-id="${a.id}">🎬 Download video (${c.durationSec || ''}s)</button></div><p class="muted small" style="text-align:center;margin:6px 0 0">Records in real time — keep this tab open and visible. Silent, with burned-in captions; add music/voice in the app you post from.</p>` : ''}
+      ${a.format === 'reel' || a.format === 'video' ? `<div class="row" style="justify-content:center;margin-top:8px"><button class="btn sm" data-action="record-video" data-id="${a.id}">🎬 Download video (${c.durationSec || ''}s)</button></div><p class="muted small" style="text-align:center;margin:6px 0 0">With AI voiceover, music and burned-in captions. Records in real time — keep this tab open.</p>` : ''}
       <div class="card" style="margin-top:14px"><div class="card-head" style="margin-bottom:8px"><h3 style="margin:0">Hook & virality advisor</h3><button class="link small" data-action="rescore" data-id="${a.id}">Re-score</button></div>
         ${Object.entries({ hook: 'Hook clarity', showDontTell: 'Show-don’t-tell', shareability: 'Shareability', cta: 'CTA & link' }).map(([k, l]) => `<div class="dim"><span>${l}</span><div class="bar ${sc.dims?.[k] >= 70 ? 'ok' : 'signal'}"><i style="width:${sc.dims?.[k] || 0}%"></i></div><span class="mono">${sc.dims?.[k] ?? '–'}</span></div>`).join('')}
         <div style="margin:8px 0">${(sc.tags || []).map((t) => `<span class="tag">${esc(t)}</span>`).join('')}</div>
@@ -670,16 +670,34 @@ const actions = {
   async png(el) {
     await svgToPng(el.dataset.src, el.dataset.name);
   },
-  async 'record-video'(el) {
+  'record-video'(el) {
+    openVideoSettings(el.dataset.id);
+  },
+  async 'start-recording'(el) {
     if (el.classList.contains('busy')) return;
+    const f = $('#videoSettings');
+    const opts = {
+      voiceover: f.querySelector('[name=voiceover]').checked,
+      voice: f.querySelector('[name=voice]').value,
+      style: f.querySelector('[name=style]').value,
+      music: f.querySelector('[name=music]').value,
+      musicVolume: Number(f.querySelector('[name=musicVolume]').value) / 100,
+      musicFile: f.querySelector('[name=musicFile]')?.files?.[0] || S._musicFile || null,
+    };
+    const { musicFile, ...persist } = opts;
+    localStorage.setItem('ll_video', JSON.stringify(persist));
+    if (opts.music === 'upload' && !opts.musicFile) return toast('Choose a music file first', 'bad');
+    S._musicFile = opts.musicFile;
     const label = el.textContent;
     el.classList.add('busy');
+    const actx = new (window.AudioContext || window.webkitAudioContext)();
     try {
-      const name = await recordVideo(el.dataset.id, (txt) => (el.textContent = txt));
+      const name = await recordVideo(el.dataset.id, opts, actx, (txt) => (el.textContent = txt));
       toast(`Video saved: ${name}`, 'ok');
     } catch (e) {
       toast(e.message, 'bad');
     } finally {
+      actx.close().catch(() => {});
       el.classList.remove('busy');
       el.textContent = label;
     }
@@ -934,15 +952,200 @@ const lum = (hex) => {
 };
 const ease = (x) => 1 - Math.pow(1 - Math.min(1, Math.max(0, x)), 3);
 
-async function recordVideo(assetId, onProgress) {
+const MUSIC_MOODS = {
+  upbeat: { label: 'Upbeat pop', bpm: 108, wave: 'triangle', chords: [[0, 4, 7], [7, 11, 14], [9, 12, 16], [5, 9, 12]], kick: 'four', hat: 8, clap: true, arp: true },
+  chill: { label: 'Chill lo-fi', bpm: 84, wave: 'sine', chords: [[0, 4, 7, 11], [9, 12, 16, 19], [5, 9, 12, 16], [7, 11, 14, 17]], kick: 'half', hat: 8, clap: false, arp: false },
+  corporate: { label: 'Clean corporate', bpm: 100, wave: 'triangle', chords: [[0, 4, 7], [9, 12, 16], [5, 9, 12], [7, 11, 14]], kick: 'half', hat: 0, clap: false, arp: true },
+  energetic: { label: 'Energetic electronic', bpm: 124, wave: 'sawtooth', chords: [[9, 12, 16], [5, 9, 12], [0, 4, 7], [7, 11, 14]], kick: 'four', hat: 16, clap: true, arp: true },
+};
+function guessMood(text) {
+  const t = String(text || '').toLowerCase();
+  if (/lo-?fi|chill|calm|warm|ambient/.test(t)) return 'chill';
+  if (/electro|driving|energetic|fast|120|124/.test(t)) return 'energetic';
+  if (/corporate|piano|clean|minimal/.test(t)) return 'corporate';
+  return 'upbeat';
+}
+
+async function openVideoSettings(assetId) {
+  const a = await api('GET', `/api/assets/${assetId}`);
+  const tts = await api('GET', '/api/tts').catch(() => ({ available: false, voices: [] }));
+  const saved = JSON.parse(localStorage.getItem('ll_video') || '{}');
+  const mood = saved.music || guessMood(a.content?.musicMood);
+  const voices = tts.voices?.length ? tts.voices : [{ id: 'Puck', label: 'Puck — upbeat' }];
+  openModal(`${modalHead('Download video')}
+  <form class="modal-body stack" id="videoSettings" onsubmit="return false">
+    <div class="muted small">${esc(a.title)} · ${esc(a.aspect_ratio)} · ${a.content?.durationSec || ''}s planned. Records in real time in this tab — keep it open and visible.</div>
+    <div class="card stack" style="gap:10px">
+      <label class="row" style="justify-content:space-between"><b>🎙 Voiceover</b><span class="toggle"><input type="checkbox" name="voiceover" ${tts.available && saved.voiceover !== false ? 'checked' : ''} ${tts.available ? '' : 'disabled'}><span></span></span></label>
+      ${tts.available ? `<div class="form-grid"><label class="f">Voice<select name="voice">${voices.map((v) => `<option value="${esc(v.id)}" ${v.id === (saved.voice || 'Puck') ? 'selected' : ''}>${esc(v.label)}</option>`).join('')}</select></label>
+      <label class="f">Delivery style <span class="hint">optional</span><input type="text" name="style" value="${esc(saved.style ?? 'energetic and friendly, like a product demo')}"></label></div>
+      <div class="muted small">Reads each scene's voiceover script with ${esc(tts.provider)} (${esc(tts.model)}). Scenes stretch to fit the narration. Audio is cached, so re-recording is free.</div>` : `<div class="muted small">Needs GEMINI_API_KEY or OPENAI_API_KEY on the server.</div><input type="hidden" name="voice" value="Puck"><input type="hidden" name="style" value="">`}
+    </div>
+    <div class="card stack" style="gap:10px">
+      <b>🎵 Music</b>
+      <div class="form-grid">
+        <label class="f">Track<select name="music" onchange="document.getElementById('musicUpload').style.display=this.value==='upload'?'block':'none'">
+          ${Object.entries(MUSIC_MOODS).map(([k, m]) => `<option value="${k}" ${k === mood ? 'selected' : ''}>Generated · ${m.label}</option>`).join('')}
+          <option value="upload" ${mood === 'upload' ? 'selected' : ''}>Upload my own track…</option>
+          <option value="none" ${mood === 'none' ? 'selected' : ''}>No music</option></select></label>
+        <label class="f">Music volume<input type="range" name="musicVolume" min="0" max="100" value="${saved.musicVolume != null ? Math.round(saved.musicVolume * 100) : 55}"></label>
+      </div>
+      <div id="musicUpload" style="display:${mood === 'upload' ? 'block' : 'none'}"><input type="file" name="musicFile" accept="audio/*"><div class="muted small">MP3, WAV or M4A. Use music you have the rights to — it loops to fit and fades out.</div></div>
+      <div class="muted small">Generated tracks are original and created on your computer, so there are no licensing issues. Music automatically ducks under the voice.</div>
+    </div>
+    <div class="row"><button type="button" class="btn signal" data-action="start-recording" data-id="${a.id}">🎬 Record &amp; download</button><button type="button" class="btn ghost" data-action="close">Cancel</button></div>
+  </form>`, { narrow: true });
+}
+
+const midiHz = (m) => 440 * Math.pow(2, (m - 69) / 12);
+function noiseBuffer(ctx) {
+  const b = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
+  const d = b.getChannelData(0);
+  for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  return b;
+}
+/** Original procedural backing track rendered into an (offline) audio context. */
+function synthMusic(ctx, out, moodKey, D) {
+  const m = MUSIC_MOODS[moodKey] || MUSIC_MOODS.upbeat;
+  const beat = 60 / m.bpm;
+  const bar = beat * 4;
+  const root = 57; // A3 area; chords are offsets from C so this lands in a comfortable key
+  const noise = noiseBuffer(ctx);
+  const lp = ctx.createBiquadFilter();
+  lp.type = 'lowpass';
+  lp.frequency.value = m.wave === 'sawtooth' ? 2200 : 3200;
+  lp.connect(out);
+  const note = (freq, t, dur, { type = m.wave, gain = 0.05, attack = 0.02, dest = lp } = {}) => {
+    const o = ctx.createOscillator();
+    const g = ctx.createGain();
+    o.type = type;
+    o.frequency.value = freq;
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(gain, t + attack);
+    g.gain.exponentialRampToValueAtTime(0.0008, t + dur);
+    o.connect(g).connect(dest);
+    o.start(t);
+    o.stop(t + dur + 0.05);
+  };
+  const perc = (t, { freq = 7000, type = 'highpass', gain = 0.06, dur = 0.05 } = {}) => {
+    const src = ctx.createBufferSource();
+    src.buffer = noise;
+    const f = ctx.createBiquadFilter();
+    f.type = type;
+    f.frequency.value = freq;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(gain, t);
+    g.gain.exponentialRampToValueAtTime(0.0008, t + dur);
+    src.connect(f).connect(g).connect(out);
+    src.start(t);
+    src.stop(t + dur + 0.02);
+  };
+  const kick = (t) => {
+    const o = ctx.createOscillator();
+    const g = ctx.createGain();
+    o.frequency.setValueAtTime(130, t);
+    o.frequency.exponentialRampToValueAtTime(42, t + 0.14);
+    g.gain.setValueAtTime(0.75, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.28);
+    o.connect(g).connect(out);
+    o.start(t);
+    o.stop(t + 0.3);
+  };
+  for (let b = 0, t = 0; t < D; b++, t = b * bar) {
+    const ch = m.chords[b % m.chords.length];
+    const intro = b === 0;
+    ch.forEach((n) => note(midiHz(root + n), t, bar * 0.98, { gain: m.wave === 'sawtooth' ? 0.025 : 0.045, attack: 0.25 }));
+    for (let k = 0; k < 4; k++) {
+      const bt = t + k * beat;
+      if (bt >= D) break;
+      note(midiHz(root - 12 + ch[0]), bt, beat * (m.bpm < 90 ? 1.6 : 0.85), { type: 'triangle', gain: 0.16, attack: 0.01, dest: out });
+      if (!intro && (m.kick === 'four' || (m.kick === 'half' && k % 2 === 0))) kick(bt);
+      if (!intro && m.clap && k % 2 === 1) perc(bt, { freq: 1500, type: 'bandpass', gain: 0.18, dur: 0.14 });
+      if (m.arp) for (let e = 0; e < 2; e++) note(midiHz(root + 12 + ch[(k * 2 + e) % ch.length]), bt + (e * beat) / 2, beat * 0.45, { type: 'triangle', gain: 0.035, attack: 0.005 });
+    }
+    if (!intro && m.hat) for (let h = 0; h < m.hat; h++) {
+      const ht = t + (h * bar) / m.hat;
+      if (ht < D) perc(ht, { gain: h % 2 ? 0.035 : 0.055 });
+    }
+  }
+}
+
+const b64ToBuf = (b64) => Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)).buffer;
+
+/** Build the mixed soundtrack (voice + ducked music) and the scene timeline it implies. */
+async function buildSoundtrack(asset, sb, opts, onProgress) {
+  let vo = null;
+  if (opts.voiceover) {
+    onProgress?.('Generating voiceover…');
+    vo = await api('POST', `/api/assets/${asset.id}/voiceover`, { voice: opts.voice, style: opts.style });
+  }
+  const rate = 44100;
+  const decodeCtx = new OfflineAudioContext(2, rate, rate);
+  const voBufs = vo ? await Promise.all(vo.scenes.map((x) => (x.audio ? decodeCtx.decodeAudioData(b64ToBuf(x.audio)) : null))) : sb.map(() => null);
+  // Stretch scenes so narration never gets cut off.
+  let cursor = 0;
+  const timeline = sb.map((s, i) => {
+    const planned = Math.max(1, s.end - s.start);
+    const need = voBufs[i] ? voBufs[i].duration + 0.45 : 0;
+    const dur = Math.max(planned, need);
+    const scene = { ...s, start: cursor, end: cursor + dur, voAt: cursor + 0.15 };
+    cursor += dur;
+    return scene;
+  });
+  const D = cursor + 0.6;
+  if (!opts.voiceover && opts.music === 'none') return { timeline, D, buffer: null };
+  onProgress?.('Mixing audio…');
+  const ctx = new OfflineAudioContext(2, Math.ceil(D * rate), rate);
+  const master = ctx.createDynamicsCompressor();
+  master.threshold.value = -14;
+  master.ratio.value = 3;
+  master.connect(ctx.destination);
+  if (opts.music !== 'none') {
+    const mg = ctx.createGain();
+    const vol = Math.max(0, Math.min(1, opts.musicVolume ?? 0.55));
+    mg.gain.setValueAtTime(vol, 0);
+    timeline.forEach((s, i) => {
+      if (!voBufs[i]) return;
+      const a = s.voAt;
+      const b = a + voBufs[i].duration;
+      mg.gain.setValueAtTime(vol, Math.max(0, a - 0.2));
+      mg.gain.linearRampToValueAtTime(vol * 0.3, a);
+      mg.gain.setValueAtTime(vol * 0.3, b);
+      mg.gain.linearRampToValueAtTime(vol, b + 0.3);
+    });
+    mg.gain.setValueAtTime(mg.gain.value, Math.max(0, D - 1.4));
+    mg.gain.linearRampToValueAtTime(0, D);
+    mg.connect(master);
+    if (opts.music === 'upload' && opts.musicFile) {
+      const buf = await ctx.decodeAudioData(await opts.musicFile.arrayBuffer());
+      const src = ctx.createBufferSource();
+      src.buffer = buf;
+      src.loop = true;
+      src.connect(mg);
+      src.start(0);
+    } else synthMusic(ctx, mg, opts.music, D);
+  }
+  timeline.forEach((s, i) => {
+    if (!voBufs[i]) return;
+    const src = ctx.createBufferSource();
+    src.buffer = voBufs[i];
+    const g = ctx.createGain();
+    g.gain.value = 1.1;
+    src.connect(g).connect(master);
+    src.start(s.voAt);
+  });
+  return { timeline, D, buffer: await ctx.startRendering() };
+}
+
+async function recordVideo(assetId, opts, actx, onProgress) {
   if (!window.MediaRecorder || !HTMLCanvasElement.prototype.captureStream) throw new Error('This browser cannot record video. Use Chrome or Edge on a computer.');
-  const mime = ['video/mp4;codecs=avc1.42E01E', 'video/mp4;codecs=avc1', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm'].find((m) => MediaRecorder.isTypeSupported(m));
+  const mime = ['video/mp4;codecs=avc1.42E01E,mp4a.40.2', 'video/mp4;codecs=avc1,mp4a.40.2', 'video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm'].find((m) => MediaRecorder.isTypeSupported(m));
   if (!mime) throw new Error('No supported video format in this browser. Use Chrome or Edge.');
   const a = await api('GET', `/api/assets/${assetId}`);
   const c = a.content || {};
-  const sb = (c.storyboard || []).slice().sort((x, y) => x.start - y.start);
-  if (!sb.length) throw new Error('This creative has no storyboard to record.');
-  const D = c.durationSec || sb.at(-1).end;
+  const planned = (c.storyboard || []).slice().sort((x, y) => x.start - y.start);
+  if (!planned.length) throw new Error('This creative has no storyboard to record.');
+  const { timeline: sb, D, buffer } = await buildSoundtrack(a, planned, opts, onProgress);
   const [W, H] = { '9:16': [1080, 1920], '1:1': [1080, 1080], '4:5': [1080, 1350], '16:9': [1920, 1080], '1.91:1': [1200, 628] }[a.aspect_ratio] || [1080, 1920];
   const M = Math.min(W, H);
   const vertical = H > W;
@@ -1106,16 +1309,28 @@ async function recordVideo(assetId, onProgress) {
   }
 
   const stream = canvas.captureStream(30);
-  const rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 8_000_000 });
+  let src = null;
+  if (buffer) {
+    await actx.resume();
+    const dest = actx.createMediaStreamDestination();
+    src = actx.createBufferSource();
+    src.buffer = buffer;
+    src.connect(dest);
+    dest.stream.getAudioTracks().forEach((tr) => stream.addTrack(tr));
+  }
+  const rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 8_000_000, audioBitsPerSecond: 192_000 });
   const chunks = [];
   rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
   const stopped = new Promise((r) => (rec.onstop = r));
   draw(0);
   rec.start(500);
+  const startAt = actx.currentTime + 0.05;
+  if (src) src.start(startAt);
   const t0 = performance.now();
+  const clock = () => (src ? Math.max(0, actx.currentTime - startAt) : (performance.now() - t0) / 1000);
   await new Promise((resolve) => {
     const tick = () => {
-      const t = (performance.now() - t0) / 1000;
+      const t = clock();
       draw(Math.min(t, D));
       onProgress?.(`Recording… ${Math.max(0, Math.ceil(D - t))}s left`);
       if (t >= D + 0.3) return resolve();
@@ -1126,11 +1341,27 @@ async function recordVideo(assetId, onProgress) {
   rec.stop();
   await stopped;
   stream.getTracks().forEach((tr) => tr.stop());
-  const ext = mime.startsWith('video/mp4') ? 'mp4' : 'webm';
+  let blob = new Blob(chunks, { type: mime.split(';')[0] });
+  let ext = mime.startsWith('video/mp4') ? 'mp4' : 'webm';
+  const standard = mime.includes('avc1') && (!buffer || mime.includes('mp4a'));
+  if (!standard) {
+    // Browser recorded VP9/Opus — convert server-side to H.264 + AAC so every platform accepts it.
+    onProgress?.('Converting to MP4…');
+    try {
+      const headers = { 'content-type': 'application/octet-stream' };
+      const tok = localStorage.getItem('ll_token');
+      if (tok) headers.authorization = `Bearer ${tok}`;
+      const r = await fetch('/api/transcode', { method: 'POST', headers, body: blob });
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `HTTP ${r.status}`);
+      blob = await r.blob();
+      ext = 'mp4';
+    } catch (e) {
+      toast(`Could not convert to H.264 MP4 (${e.message}). Saved the original ${ext.toUpperCase()} — convert it in CapCut before uploading to Instagram.`, 'bad');
+    }
+  }
   const name = `${(S.ws.name || 'video').replace(/[^a-z0-9]+/gi, '-').toLowerCase()}-${a.channel}-${a.format}.${ext}`;
-  const link = Object.assign(document.createElement('a'), { href: URL.createObjectURL(new Blob(chunks, { type: mime.split(';')[0] })), download: name });
+  const link = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: name });
   link.click();
-  if (ext === 'webm') toast('Saved as WebM — this browser cannot record MP4. Convert it (e.g. in CapCut) before uploading to Instagram.', 'bad');
   return name;
 }
 

@@ -36,7 +36,7 @@ The first start seeds a demo launch, **"Relay 2.0"**, with creatives in every ap
 |---|---|---|
 | AI | Deterministic template generator built only from your workspace facts (no invented stats) | `GEMINI_API_KEY` or `OPENAI_API_KEY` |
 | Images | Brand-aware SVG flyers, post images and slides, exported to PNG in the browser | Optional OpenAI background art (`AI_IMAGE_GENERATION=true`) |
-| Video | Storyboard, script, VO, captions, an animated SVG preview and a structured render job | Same render job. Plug in Remotion, FFmpeg or a render API to get an MP4 |
+| Video | Storyboard, script, captions, animated preview, and **Download video**: an MP4 recorded in your browser with generated music and burned-in captions | Adds an AI **voiceover** (Gemini TTS, `GEMINI_TTS_MODEL`, default `gemini-3.8-flash-tts`; or OpenAI `OPENAI_TTS_MODEL`). The server converts recordings to H.264/AAC with ffmpeg (installed in the Docker image) |
 | Publishing | `PUBLISH_MODE=mock`: API channels publish through a simulated adapter (`MOCK_FAILURE_RATE` exercises retries and FAILED). Share Kit channels create manual tasks | `PUBLISH_MODE=live` plus platform credentials |
 | Metrics | Simulated, and labelled as simulated in the UI | Manual entry and conversion webhooks today. Platform insights APIs are the next step |
 
