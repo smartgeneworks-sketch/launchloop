@@ -38,6 +38,7 @@ function theme(workspace) {
     heading: stack(fonts.heading),
     body: stack(fonts.body),
     logo: workspace.brand?.logo || null,
+    headingWeight: Number(workspace.brand?.fonts?.headingWeight) || 800,
     screenshot: workspace.screenshots?.[0]?.dataUrl || null,
     name: workspace.name || '',
   };
@@ -118,7 +119,7 @@ export function renderImageSvg(asset, workspace, { images = {} } = {}) {
     fs *= 0.9;
     lines = wrapText(headline, charsFor(colW, fs));
   }
-  const h1 = textBlock(lines, { xPos: pad, y: y + fs, fs, weight: 800, fill: t.fg, family: t.heading, lh: 1.05 });
+  const h1 = textBlock(lines, { xPos: pad, y: y + fs, fs, weight: t.headingWeight, fill: t.fg, family: t.heading, lh: 1.05 });
   parts.push(h1.svg);
   y += h1.height + fs * 0.5;
 
@@ -163,7 +164,7 @@ export function renderSlideSvg(asset, workspace, index = 0) {
     lines = wrapText(s.title, charsFor(W - pad * 2, fs));
   }
   let y = H * 0.32;
-  const h = textBlock(lines, { xPos: pad, y, fs, weight: 800, fill: t.fg, family: t.heading, lh: 1.05 });
+  const h = textBlock(lines, { xPos: pad, y, fs, weight: t.headingWeight, fill: t.fg, family: t.heading, lh: 1.05 });
   parts.push(h.svg);
   y += h.height + fs * 0.4;
   const bfs = W * 0.042;
@@ -202,7 +203,7 @@ export function renderVideoPreviewSvg(asset, workspace, { library = [], images =
       const sfs = W * (vertical ? 0.036 : 0.022);
       const sub = wrapText(s.vo, charsFor(W - pad * 2.4, sfs, 0.5)).slice(0, 3);
       const headY = Math.max(vertical ? H * 0.28 : 0, chipY + vfs * 1.9 + fs * 1.15);
-      const head = textBlock(lines.slice(0, vertical ? 5 : 3), { xPos: W / 2, y: headY, fs, weight: 800, fill: t.fg, family: t.heading, anchor: 'middle', lh: 1.05 });
+      const head = textBlock(lines.slice(0, vertical ? 5 : 3), { xPos: W / 2, y: headY, fs, weight: t.headingWeight, fill: t.fg, family: t.heading, anchor: 'middle', lh: 1.05 });
       const frameY = headY + head.height - fs * 0.55;
       const subTop = H - pad * 1.6 - sfs * 1.35 * sub.length - sfs;
       const frameH = Math.max(0, Math.min(vertical ? H * 0.32 : H * 0.3, subTop - frameY - pad * 0.4));
