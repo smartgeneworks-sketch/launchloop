@@ -91,10 +91,9 @@ export async function ingestWorkspace({ db, ai }, wsId, { url, text } = {}) {
     audience: analysis.audience || ws.audience,
     pricing: analysis.pricing || ws.pricing,
     referral_mechanics: ws.referral_mechanics || analysis.referral_mechanics,
-    source_meta: { url: url || null, manual: !url, pages, notes, generator: analysis.generator, importedAt: nowIso() },
+    source_meta: { url: url || null, manual: !url, pages, notes, generator: analysis.generator, importedAt: nowIso(), brandSuggestion: extracted.brandSuggestion || null },
   };
   if (url) patch.website_url = url;
-  if (extracted.themeColor && /^#[0-9a-f]{6}$/i.test(extracted.themeColor)) patch.brand = { ...ws.brand, colors: { ...ws.brand.colors, primary: extracted.themeColor } };
   return { workspace: db.update('workspaces', wsId, patch), analysis, notes };
 }
 

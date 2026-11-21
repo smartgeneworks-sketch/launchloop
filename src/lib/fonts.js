@@ -1,0 +1,45 @@
+/** Curated Google Fonts with the weights each family actually ships (css2 rejects missing weights). */
+export const FONTS = [
+  { name: 'Inter', cat: 'sans', weights: [400, 600, 700, 800], vibe: 'neutral, product UI' },
+  { name: 'Plus Jakarta Sans', cat: 'sans', weights: [400, 600, 700, 800], vibe: 'modern SaaS' },
+  { name: 'Poppins', cat: 'sans', weights: [400, 600, 700, 800], vibe: 'friendly, geometric' },
+  { name: 'Montserrat', cat: 'sans', weights: [400, 600, 700, 800], vibe: 'bold, confident' },
+  { name: 'DM Sans', cat: 'sans', weights: [400, 600, 700, 800], vibe: 'clean, startup' },
+  { name: 'Outfit', cat: 'sans', weights: [400, 600, 700, 800], vibe: 'rounded, approachable' },
+  { name: 'Manrope', cat: 'sans', weights: [400, 600, 700, 800], vibe: 'technical, crisp' },
+  { name: 'Sora', cat: 'sans', weights: [400, 600, 700, 800], vibe: 'futuristic, tech' },
+  { name: 'Space Grotesk', cat: 'sans', weights: [400, 600, 700], vibe: 'developer, quirky' },
+  { name: 'Urbanist', cat: 'sans', weights: [400, 600, 700, 800], vibe: 'sleek, minimal' },
+  { name: 'Figtree', cat: 'sans', weights: [400, 600, 700, 800], vibe: 'warm, readable' },
+  { name: 'Lexend', cat: 'sans', weights: [400, 600, 700, 800], vibe: 'very legible' },
+  { name: 'Nunito', cat: 'sans', weights: [400, 600, 700, 800], vibe: 'soft, friendly' },
+  { name: 'Rubik', cat: 'sans', weights: [400, 600, 700, 800], vibe: 'playful, rounded' },
+  { name: 'Work Sans', cat: 'sans', weights: [400, 600, 700, 800], vibe: 'editorial sans' },
+  { name: 'Archivo', cat: 'sans', weights: [400, 600, 700, 800], vibe: 'strong, compact' },
+  { name: 'Bricolage Grotesque', cat: 'sans', weights: [400, 600, 700, 800], vibe: 'characterful, trendy' },
+  { name: 'Source Sans 3', cat: 'sans', weights: [400, 600, 700, 800], vibe: 'classic, trustworthy' },
+  { name: 'Fredoka', cat: 'display', weights: [400, 600, 700], vibe: 'playful, bubbly' },
+  { name: 'Baloo 2', cat: 'display', weights: [400, 600, 700, 800], vibe: 'fun, chunky' },
+  { name: 'Oswald', cat: 'display', weights: [400, 600, 700], vibe: 'condensed, punchy' },
+  { name: 'Anton', cat: 'display', weights: [400], vibe: 'loud headlines' },
+  { name: 'Bebas Neue', cat: 'display', weights: [400], vibe: 'tall all-caps headlines' },
+  { name: 'Playfair Display', cat: 'serif', weights: [400, 600, 700, 800], vibe: 'elegant, premium' },
+  { name: 'Fraunces', cat: 'serif', weights: [400, 600, 700, 800], vibe: 'warm editorial' },
+  { name: 'Lora', cat: 'serif', weights: [400, 600, 700], vibe: 'literary, calm' },
+  { name: 'Merriweather', cat: 'serif', weights: [400, 700], vibe: 'sturdy, readable serif' },
+];
+
+export const PAIRINGS = [
+  { name: 'Modern SaaS', heading: 'Plus Jakarta Sans', body: 'Inter', tones: ['direct', 'friendly'] },
+  { name: 'Friendly', heading: 'Poppins', body: 'DM Sans', tones: ['friendly'] },
+  { name: 'Bold launch', heading: 'Montserrat', body: 'Inter', tones: ['direct'] },
+  { name: 'Tech', heading: 'Sora', body: 'Manrope', tones: ['direct'] },
+  { name: 'Developer', heading: 'Space Grotesk', body: 'Inter', tones: ['direct'] },
+  { name: 'Punchy social', heading: 'Bebas Neue', body: 'Figtree', tones: ['playful', 'direct'] },
+  { name: 'Playful', heading: 'Fredoka', body: 'Nunito', tones: ['playful'] },
+  { name: 'Trendy', heading: 'Bricolage Grotesque', body: 'DM Sans', tones: ['playful', 'friendly'] },
+  { name: 'Premium', heading: 'Playfair Display', body: 'Source Sans 3', tones: ['formal'] },
+  { name: 'Editorial', heading: 'Fraunces', body: 'Work Sans', tones: ['formal', 'friendly'] },
+];
+
+export const fontByName = (name) => FONTS.find((f) => f.name.toLowerCase() === String(name || '').toLowerCase());

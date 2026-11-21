@@ -114,7 +114,13 @@ export function extractFromHtml(html) {
   };
   const all = (tag, n) => [...clean.matchAll(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`, 'gi'))].map((m) => strip(m[1])).filter(Boolean).slice(0, n);
   const body = strip(clean.match(/<body[\s\S]*<\/body>/i)?.[0] || clean);
+  const styles = [...String(html).matchAll(/<style[^>]*>([\s\S]*?)<\/style>/gi)].map((m) => m[1]).join('\n') + [...String(html).matchAll(/style="([^"]*)"/gi)].map((m) => m[1]).join(';');
+  const googleFonts = [...String(html).matchAll(/fonts\.googleapis\.com\/css2?\?([^"'\s>]+)/gi)].flatMap((m) => [...decode(m[1]).matchAll(/family=([^:&]+)/g)].map((f) => decodeURIComponent(f[1]).replace(/\+/g, ' ')));
+  const stylesheets = [...String(html).matchAll(/<link[^>]+rel=["']?stylesheet["']?[^>]*>/gi)].map((m) => m[0].match(/href=["']([^"']+)["']/i)?.[1]).filter(Boolean);
   return {
+    googleFonts,
+    stylesheets,
+    css: styles.slice(0, 200_000),
     title: strip(clean.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] || ''),
     description: meta('description') || meta('og:description'),
     ogSiteName: meta('og:site_name'),
@@ -167,5 +173,75 @@ export async function ingestUrl(rawUrl) {
     /* sitemap optional */
   }
   extracted.prices = [...new Set(extracted.prices)].slice(0, 5);
+  // Up to 2 same-origin stylesheets for the brand theme (fonts + colours).
+  for (const href of (extracted.stylesheets || []).slice(0, 4)) {
+    try {
+      const cssUrl = new URL(href, u);
+      if (cssUrl.origin !== u.origin || !robotsAllows(robotsTxt, cssUrl.pathname)) continue;
+      const r = await fetchText(cssUrl.toString(), { accept: 'text/css' });
+      if (r.ok) extracted.css += '\n' + r.text.slice(0, 400_000);
+      if (extracted.css.length > 600_000) break;
+    } catch {}
+  }
+  extracted.brandSuggestion = suggestBrand(extracted);
   return { pages, extracted, notes };
 }
+
+// ---------------------------------------------------------------- brand theme from site
+import { FONTS, PAIRINGS, fontByName } from '../lib/fonts.js';
+
+function hexToHsl(hex) {
+  let h = hex.replace('#', '');
+  if (h.length === 3) h = h.split('').map((c) => c + c).join('');
+  const [r, g, b] = [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16) / 255);
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const l = (max + min) / 2;
+  const d = max - min;
+  const s = d === 0 ? 0 : d / (1 - Math.abs(2 * l - 1));
+  let hue = 0;
+  if (d) hue = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+  return { h: (hue * 60 + 360) % 360, s, l };
+}
+const norm = (hex) => {
+  let h = hex.toLowerCase().replace('#', '');
+  if (h.length === 3) h = h.split('').map((c) => c + c).join('');
+  return '#' + h;
+};
+function shade(hex, amt) {
+  const h = norm(hex).slice(1);
+  const ch = [0, 2, 4].map((i) => Math.max(0, Math.min(255, Math.round(parseInt(h.slice(i, i + 2), 16) * (1 + amt)))));
+  return '#' + ch.map((v) => v.toString(16).padStart(2, '0')).join('');
+}
+
+/** Suggest brand colours + fonts from a site's CSS (never applied automatically). */
+export function suggestBrand(ex) {
+  const css = String(ex.css || '');
+  const counts = new Map();
+  for (const m of css.matchAll(/#(?:[0-9a-f]{6}|[0-9a-f]{3})\b/gi)) {
+    const c = norm(m[0]);
+    counts.set(c, (counts.get(c) || 0) + 1);
+  }
+  const colourful = [...counts.entries()]
+    .map(([c, n]) => ({ c, n, ...hexToHsl(c) }))
+    .filter((x) => x.s > 0.22 && x.l > 0.08 && x.l < 0.9)
+    .sort((a, b) => b.n - a.n);
+  let primary = ex.themeColor && /^#[0-9a-f]{3,6}$/i.test(ex.themeColor) ? norm(ex.themeColor) : null;
+  if (!primary) primary = (colourful.find((x) => x.l < 0.5) || colourful[0])?.c || null;
+  const ph = primary ? hexToHsl(primary) : null;
+  const accent = colourful.find((x) => x.c !== primary && x.l >= 0.45 && (!ph || Math.abs(x.h - ph.h) > 25))?.c || colourful.find((x) => x.c !== primary)?.c || null;
+  const colors = primary ? { primary, secondary: shade(primary, ph.l < 0.35 ? 0.45 : -0.25), accent: accent || '#FFB547' } : null;
+
+  const families = [...(ex.googleFonts || []), ...[...css.matchAll(/font-family\s*:\s*([^;}{]+)/gi)].map((m) => m[1].split(',')[0].replace(/["']/g, '').trim())];
+  const detected = [...new Set(families.filter((f) => f && !/^(inherit|initial|var\(|-apple-system|system-ui|sans-serif|serif|monospace|ui-)/i.test(f)))];
+  const known = detected.map((f) => fontByName(f)?.name).filter(Boolean);
+  let fonts = null;
+  if (known.length) {
+    const heading = known.find((n) => ['display', 'serif'].includes(fontByName(n).cat)) || known[0];
+    const body = known.find((n) => n !== heading && fontByName(n).cat === 'sans') || (fontByName(heading).cat === 'sans' ? heading : 'Inter');
+    fonts = { heading, body };
+  }
+  return { colors, fonts, detectedFonts: detected.slice(0, 6) };
+}
+
+export { FONTS, PAIRINGS };

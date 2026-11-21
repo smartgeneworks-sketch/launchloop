@@ -17,6 +17,9 @@ import { buildRenderJob, renderAssetSvg } from './services/media.js';
 import { Publisher } from './services/publisher.js';
 import { scoreAsset } from './services/scorer.js';
 import { TTSService, assetVoiceover } from './services/tts.js';
+import { FontService } from './services/fonts.js';
+import { addMedia, getMedia, listMedia, mediaDataUrl, resolveSceneMedia } from './services/library.js';
+import { FONTS, PAIRINGS } from './lib/fonts.js';
 import { STATES, allowedNext } from './services/stateMachine.js';
 import { buildUtmUrl } from './services/utm.js';
 import { createWorker } from './worker.js';
@@ -26,7 +29,7 @@ const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.json': 'application/json' };
 const MAX_BODY = 6 * 1024 * 1024;
 
-export function createApp({ db, ai, config, publisher, worker, tts = new TTSService(config.env, { dataDir: config.dataDir }) }) {
+export function createApp({ db, ai, config, publisher, worker, tts = new TTSService(config.env, { dataDir: config.dataDir }), fonts = new FontService({ dataDir: config.dataDir }) }) {
   const ctx = { db, ai, config };
   const routes = [];
   const on = (method, pattern, handler, opts = {}) => {
@@ -42,7 +45,7 @@ export function createApp({ db, ai, config, publisher, worker, tts = new TTSServ
 
   // ---------------------------------------------------------------- meta
   on('GET', '/api/health', () => ({ ok: true, ai: ai.info(), publishMode: publisher.mode, worker: { intervalMs: config.workerIntervalMs, ...worker?.state }, authRequired: !!config.appApiToken, tts: { available: tts.info().available, model: tts.info().model, lastError: tts.lastError } }), { public: true });
-  on('GET', '/api/config', () => ({ channels: CHANNELS, formats: FORMATS, states: STATES, taskCategories: TASK_CATEGORIES, publicBaseUrl: config.publicBaseUrl }));
+  on('GET', '/api/config', () => ({ channels: CHANNELS, formats: FORMATS, states: STATES, taskCategories: TASK_CATEGORIES, publicBaseUrl: config.publicBaseUrl, fonts: FONTS, pairings: PAIRINGS }));
   on('POST', '/api/worker/tick', async () => worker.tick());
 
   // ---------------------------------------------------------------- workspaces
@@ -144,12 +147,54 @@ export function createApp({ db, ai, config, publisher, worker, tts = new TTSServ
     const ws = db.get('workspaces', 'SELECT w.* FROM workspaces w JOIN campaigns c ON c.workspace_id = w.id WHERE c.id = ?', a.campaign_id);
     return buildRenderJob(a, ws, { publicBaseUrl: config.publicBaseUrl });
   });
-  on('GET', '/api/assets/:id/media.svg', ({ p, q, res }) => {
+  on('GET', '/api/assets/:id/media.svg', async ({ p, q, res }) => {
     const a = must(db.byId('creative_assets', p.id), 'Asset');
     const ws = db.get('workspaces', 'SELECT w.* FROM workspaces w JOIN campaigns c ON c.workspace_id = w.id WHERE c.id = ?', a.campaign_id);
-    const svg = renderAssetSvg(a, ws, { slide: Number(q.slide || 0) });
+    const svg = renderAssetSvg(a, ws, { slide: Number(q.slide || 0), ...(await prepareRender(a, ws)) });
     res.writeHead(200, { 'content-type': 'image/svg+xml; charset=utf-8', 'cache-control': 'no-cache', 'content-disposition': `inline; filename="${a.channel}-${a.format}-${a.id}.svg"` });
     res.end(svg);
+  }, { raw: true, public: true });
+
+  /** Fonts + the images this asset actually uses, embedded as data URLs (SVG-as-image can't fetch). */
+  async function prepareRender(a, ws) {
+    const library = listMedia(db, ws);
+    const ids = new Set();
+    if (a.format === 'reel' || a.format === 'video') (a.content?.storyboard || []).forEach((s, i) => { const r = resolveSceneMedia(s, i, library); if (r) ids.add(r.item.id); });
+    else if (a.content?.media?.id && a.content.media.id !== 'none') ids.add(a.content.media.id);
+    const images = {};
+    for (const mid of ids) images[mid] = mediaDataUrl(db, mid);
+    if (!['reel', 'video', 'carousel'].includes(a.format) && !a.content?.media?.id && !ws.screenshots?.length && library[0]) images.__default = mediaDataUrl(db, library[0].id);
+    return { library, images, fontCss: await fonts.forWorkspace(ws) };
+  }
+
+  // ---------------------------------------------------------------- media library & fonts
+  on('GET', '/api/workspaces/:id/media', ({ p }) => listMedia(db, must(db.byId('workspaces', p.id), 'Workspace')));
+  on('POST', '/api/workspaces/:id/media', ({ p, body }) => addMedia(db, must(db.byId('workspaces', p.id), 'Workspace'), body), { maxBody: 10 * 1024 * 1024 });
+  on('PATCH', '/api/media/:id', ({ p, body }) => {
+    const m = p.id.match(/^wsshot_(ws_[a-f0-9]+)_(\d+)$/);
+    if (m) {
+      const w = must(db.byId('workspaces', m[1]), 'Workspace');
+      const shots = [...w.screenshots];
+      if (!shots[Number(m[2])]) throw new HttpError(404, 'Image not found');
+      shots[Number(m[2])] = { ...shots[Number(m[2])], label: String(body.label || '').slice(0, 160) };
+      db.update('workspaces', w.id, { screenshots: shots });
+      return { id: p.id, label: body.label };
+    }
+    must(db.get(null, 'SELECT id FROM media WHERE id = ?', p.id), 'Image');
+    db.run('UPDATE media SET label = ? WHERE id = ?', String(body.label || '').slice(0, 160), p.id);
+    return { id: p.id, label: body.label };
+  });
+  on('DELETE', '/api/media/:id', ({ p }) => (db.run('DELETE FROM media WHERE id = ?', p.id), { deleted: true }));
+  on('GET', '/api/media/:id', ({ p, res }) => {
+    const m = getMedia(db, p.id);
+    if (!m) throw new HttpError(404, 'Image not found');
+    res.writeHead(200, { 'content-type': m.mime, 'cache-control': 'public, max-age=86400' });
+    res.end(m.data);
+  }, { raw: true, public: true });
+  on('GET', '/api/workspaces/:id/fonts.css', async ({ p, res }) => {
+    const css = await fonts.forWorkspace(must(db.byId('workspaces', p.id), 'Workspace'));
+    res.writeHead(200, { 'content-type': 'text/css; charset=utf-8', 'cache-control': 'no-cache' });
+    res.end(css);
   }, { raw: true, public: true });
 
   // ---------------------------------------------------------------- tools

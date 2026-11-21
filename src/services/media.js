@@ -8,6 +8,7 @@
 import { ASPECTS } from '../lib/channels.js';
 import { escapeXml as x, wrapText } from '../lib/util.js';
 import { stripLinkTokens } from './ai.js';
+import { resolveSceneMedia } from './library.js';
 
 const DEFAULT_COLORS = { primary: '#1F2A44', secondary: '#3B4C7A', accent: '#FFB547' };
 
@@ -79,7 +80,7 @@ function background(t, W, H, aiBg) {
 
 function screenshotFrame(t, xPos, y, w, h) {
   if (!t.screenshot || h < 60) return '';
-  return `<g transform="translate(${xPos},${y})"><defs><clipPath id="shotclip"><rect width="${w}" height="${h}" rx="24"/></clipPath></defs><rect width="${w}" height="${h}" rx="24" fill="#000" opacity="0.25" transform="translate(0,12)"/><rect width="${w}" height="${h}" rx="24" fill="#fff"/><image href="${x(t.screenshot)}" width="${w}" height="${h}" preserveAspectRatio="xMidYMin slice" clip-path="url(#shotclip)"/></g>`;
+  return `<g transform="translate(${xPos},${y})"><defs><clipPath id="shotclip"><rect width="${w}" height="${h}" rx="24"/></clipPath></defs><rect width="${w}" height="${h}" rx="24" fill="#000" opacity="0.25" transform="translate(0,12)"/><rect width="${w}" height="${h}" rx="24" fill="#fff"/><image href="${x(t.screenshot)}" width="${w}" height="${h}" preserveAspectRatio="${t.shotFit === 'contain' ? 'xMidYMid meet' : 'xMidYMin slice'}" clip-path="url(#shotclip)"/></g>`;
 }
 
 function ctaPill(t, label, xPos, y, W) {
@@ -90,8 +91,13 @@ function ctaPill(t, label, xPos, y, W) {
 }
 
 /** Flyer / promo graphic and the image for social posts. */
-export function renderImageSvg(asset, workspace) {
+export function renderImageSvg(asset, workspace, { images = {} } = {}) {
   const t = theme(workspace);
+  const cm = asset.content?.media;
+  if (cm?.id === 'none') t.screenshot = null;
+  else if (cm?.id && images[cm.id]) t.screenshot = images[cm.id];
+  else if (!t.screenshot && images.__default) t.screenshot = images.__default;
+  t.shotFit = cm?.fit || 'cover';
   const [W, H] = size(asset.aspect_ratio);
   const c = asset.content || {};
   const landscape = W > H * 1.2;
@@ -170,7 +176,7 @@ export function renderSlideSvg(asset, workspace, index = 0) {
 }
 
 /** Animated storyboard preview (SMIL) — a faithful stand-in until a real render. */
-export function renderVideoPreviewSvg(asset, workspace) {
+export function renderVideoPreviewSvg(asset, workspace, { library = [], images = {} } = {}) {
   const t = theme(workspace);
   const [W, H] = size(asset.aspect_ratio);
   const sb = asset.content?.storyboard || [];
@@ -179,7 +185,9 @@ export function renderVideoPreviewSvg(asset, workspace) {
   const vertical = H > W;
   const chipY = header(t, W, pad, null, H).bottom + Math.min(W, H) * 0.03;
   const scenes = sb
-    .map((s) => {
+    .map((s, si) => {
+      const pickm = resolveSceneMedia(s, si, library);
+      const img = pickm && images[pickm.item.id];
       const k0 = (s.start / D).toFixed(4);
       const k1 = (s.end / D).toFixed(4);
       const anim =
@@ -203,9 +211,13 @@ export function renderVideoPreviewSvg(asset, workspace) {
         <rect x="${pad}" y="${chipY}" rx="${vfs * 0.9}" width="${vfs * 13}" height="${vfs * 1.9}" fill="${t.accent}"/>
         <text x="${pad + vfs * 0.8}" y="${chipY + vfs * 1.3}" font-family="${x(t.body)}" font-size="${vfs}" font-weight="800" fill="${t.onAccent}">${x(String(s.type || '').toUpperCase())} · ${mm(s.start)}–${mm(s.end)}</text>
         ${head.svg}
-        <rect x="${pad}" y="${frameY}" width="${W - pad * 2}" height="${frameH}" rx="24" fill="#000" fill-opacity="0.22" stroke="${t.fg}" stroke-opacity="0.35" stroke-dasharray="14 10" stroke-width="3"/>
+        ${img && frameH > 40
+          ? `<defs><clipPath id="sc${si}"><rect x="${pad}" y="${frameY}" width="${W - pad * 2}" height="${frameH}" rx="24"/></clipPath></defs>
+             <g clip-path="url(#sc${si})"><rect x="${pad}" y="${frameY}" width="${W - pad * 2}" height="${frameH}" fill="#0b0d12" fill-opacity="0.35"/>
+             <image href="${x(img)}" x="${pad}" y="${frameY}" width="${W - pad * 2}" height="${frameH}" preserveAspectRatio="${pickm.fit === 'cover' ? 'xMidYMin slice' : 'xMidYMid meet'}" ${s.type === 'hook' && pickm.auto ? 'opacity="0.45"' : ''}/></g>`
+          : `<rect x="${pad}" y="${frameY}" width="${W - pad * 2}" height="${frameH}" rx="24" fill="#000" fill-opacity="0.22" stroke="${t.fg}" stroke-opacity="0.35" stroke-dasharray="14 10" stroke-width="3"/>
         ${textBlock(wrapText('▶ ' + s.shot, charsFor(W - pad * 3, vfs, 0.5)).slice(0, 2), { xPos: W / 2, y: frameY + frameH / 2 - vfs * 0.4, fs: vfs, weight: 700, fill: t.fg, family: t.body, anchor: 'middle', lh: 1.3 }).svg}
-        ${textBlock(wrapText(s.visual, charsFor(W - pad * 3, vfs * 0.85, 0.5)).slice(0, 2), { xPos: W / 2, y: frameY + frameH / 2 + vfs * 2.2, fs: vfs * 0.85, weight: 400, fill: t.fg, family: t.body, anchor: 'middle', lh: 1.3, opacity: 0.75 }).svg}
+        ${textBlock(wrapText(s.visual, charsFor(W - pad * 3, vfs * 0.85, 0.5)).slice(0, 2), { xPos: W / 2, y: frameY + frameH / 2 + vfs * 2.2, fs: vfs * 0.85, weight: 400, fill: t.fg, family: t.body, anchor: 'middle', lh: 1.3, opacity: 0.75 }).svg}`}
         <rect x="${pad}" y="${H - pad * 1.6 - sfs * 1.35 * sub.length - sfs}" width="${W - pad * 2}" height="${sfs * 1.35 * sub.length + sfs * 0.9}" rx="16" fill="#000" fill-opacity="0.55"/>
         ${textBlock(sub, { xPos: W / 2, y: H - pad * 1.6 - sfs * 1.35 * sub.length + sfs * 0.1, fs: sfs, weight: 600, fill: '#FFFFFF', family: t.body, anchor: 'middle', lh: 1.35 }).svg}
       </g>`;
@@ -215,11 +227,13 @@ export function renderVideoPreviewSvg(asset, workspace) {
   <rect x="0" y="${H - 10}" width="0" height="10" fill="${t.accent}"><animate attributeName="width" from="0" to="${W}" dur="${D}s" repeatCount="indefinite"/></rect></svg>`;
 }
 
-export function renderAssetSvg(rawAsset, workspace, { slide = 0 } = {}) {
+export function renderAssetSvg(rawAsset, workspace, { slide = 0, fontCss = '', library = [], images = {} } = {}) {
   const asset = { ...rawAsset, headline: String(rawAsset.headline || '').replace(/\s*\{\{\s*link\s*\}\}\s*/gi, ' ').trim(), content: stripLinkTokens(rawAsset.content || {}) };
-  if (asset.format === 'reel' || asset.format === 'video') return renderVideoPreviewSvg(asset, workspace);
-  if (asset.format === 'carousel') return renderSlideSvg(asset, workspace, slide);
-  return renderImageSvg(asset, workspace);
+  let svg;
+  if (asset.format === 'reel' || asset.format === 'video') svg = renderVideoPreviewSvg(asset, workspace, { library, images });
+  else if (asset.format === 'carousel') svg = renderSlideSvg(asset, workspace, slide);
+  else svg = renderImageSvg(asset, workspace, { images });
+  return fontCss ? svg.replace(/^(<svg[^>]*>)/, `$1<defs><style>${fontCss}</style></defs>`) : svg;
 }
 
 /** Renderer-agnostic video render job. Feed it to Remotion / FFmpeg / a render API. */

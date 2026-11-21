@@ -116,7 +116,7 @@ async function loadWorkspaces(selectId) {
 async function loadWorkspace(selectCmp) {
   if (!S.wsId) return render();
   localStorage.setItem('ll_ws', S.wsId);
-  [S.ws, S.channels, S.campaigns] = await Promise.all([api('GET', `/api/workspaces/${S.wsId}`), api('GET', `/api/workspaces/${S.wsId}/channels`), api('GET', `/api/workspaces/${S.wsId}/campaigns`)]);
+  [S.ws, S.channels, S.campaigns, S.media] = await Promise.all([api('GET', `/api/workspaces/${S.wsId}`), api('GET', `/api/workspaces/${S.wsId}/channels`), api('GET', `/api/workspaces/${S.wsId}/campaigns`), api('GET', `/api/workspaces/${S.wsId}/media`)]);
   S.cmpId = selectCmp || (S.campaigns.find((c) => c.id === localStorage.getItem('ll_cmp')) || S.campaigns[0])?.id || null;
   await loadCampaign();
 }
@@ -275,10 +275,17 @@ function viewWorkspace() {
       <h3 style="margin-top:18px">3 · Brand kit</h3>
       <div class="form-grid">
         <div class="row">${['primary', 'secondary', 'accent'].map((k) => `<label class="f">${k}<input type="color" name="color_${k}" value="${esc(w.brand?.colors?.[k] || '#000000')}"></label>`).join('')}</div>
-        <div class="row"><label class="f" style="flex:1">Heading font<input type="text" name="font_heading" value="${esc(w.brand?.fonts?.heading || '')}"></label><label class="f" style="flex:1">Body font<input type="text" name="font_body" value="${esc(w.brand?.fonts?.body || '')}"></label></div>
+        <div class="row"><label class="f" style="flex:1">Heading font<select name="font_heading" data-action="font-change">${fontOptions(w.brand?.fonts?.heading || 'Inter')}</select></label><label class="f" style="flex:1">Body font<select name="font_body" data-action="font-change">${fontOptions(w.brand?.fonts?.body || 'Inter')}</select></label></div>
+        <div class="full">${brandPreview(w)}</div>
+        <div class="full"><div class="eyebrow" style="margin-bottom:6px">Font pairings ${suggestedPairing(w) ? `<span class="muted" style="text-transform:none;letter-spacing:0">· suggested for a ${esc(w.locale?.tone || 'friendly')} tone: <b>${esc(suggestedPairing(w).name)}</b></span>` : ''}</div>
+          <div class="chips">${S.config.pairings.map((pp) => `<button type="button" class="chip ${pp.heading === w.brand?.fonts?.heading && pp.body === w.brand?.fonts?.body ? 'on' : ''}" data-action="apply-pairing" data-h="${esc(pp.heading)}" data-b="${esc(pp.body)}" style="font-family:'${esc(pp.heading)}',sans-serif">${esc(pp.name)} · ${esc(pp.heading)} + ${esc(pp.body)}</button>`).join('')}</div></div>
+        ${siteThemeCard(w)}
         <div><div class="f" style="margin-bottom:6px;font-size:12px;font-weight:600;color:var(--ink-2)">Logo</div><div class="row">${w.brand?.logo ? `<span class="logo-pv"><img src="${esc(w.brand.logo)}" alt="logo"></span><button type="button" class="btn xs ghost" data-action="remove-logo">Remove</button>` : '<span class="muted small">No logo — wordmark is used</span>'}<label class="btn ghost sm">Upload<input type="file" accept="image/png,image/jpeg,image/svg+xml,image/webp" data-upload="logo" hidden></label></div></div>
-        <div><div style="margin-bottom:6px;font-size:12px;font-weight:600;color:var(--ink-2)">Product screenshots <span class="muted">(used in flyers & posts)</span></div><div class="thumbs">${(w.screenshots || []).map((s, i) => `<figure><img src="${esc(s.dataUrl)}" alt=""><button type="button" data-action="remove-shot" data-i="${i}">×</button></figure>`).join('')}${(w.screenshots || []).length < 4 ? `<label class="btn ghost sm" style="height:80px;align-items:center">+ Add<input type="file" accept="image/*" data-upload="screenshot" hidden></label>` : ''}</div></div>
       </div>
+      <h3 style="margin-top:18px">Media library <span class="muted small">— screenshots & pictures for your demos</span></h3>
+      <p class="muted small" style="margin:0 0 8px">Label each image with what it shows (e.g. “upload camera roll photo”, “auto-crop result”, “print sheet 35×45”). Video scenes automatically pick the image whose label matches the scene, and you can choose exactly which image appears in each scene in the video editor.</p>
+      <div class="media-grid">${(S.media || []).map((m) => `<figure class="media-item"><img src="${esc(m.url)}" alt="" loading="lazy"><input type="text" value="${esc(m.label || '')}" placeholder="What does this show?" data-media-label="${esc(m.id)}"><div class="row" style="justify-content:space-between"><span class="muted small">${m.brandKit ? 'brand kit' : esc(Math.round((m.bytes || 0) / 1024) + ' KB')}</span>${m.brandKit ? `<button type="button" class="link small" data-action="remove-shot" data-i="${esc(m.id.split('_').pop())}">remove</button>` : `<button type="button" class="link small" data-action="delete-media" data-id="${esc(m.id)}">delete</button>`}</div></figure>`).join('')}
+        <label class="media-add">+ Upload images<span class="muted small">PNG / JPG · several at once</span><input type="file" accept="image/*" multiple data-upload="media" hidden></label></div>
       <h3 style="margin-top:18px">4 · Audience & locale</h3>
       <div class="form-grid">
         <label class="f">Language<select name="language">${opt([['en', 'English'], ['es', 'Spanish'], ['fr', 'French'], ['de', 'German'], ['pt', 'Portuguese']], L.language)}</select></label>
@@ -307,6 +314,91 @@ npm run webhook -- conversion --url ${S.config.publicBaseUrl} \\
       </div></div>
   </div></div>`;
 }
+// ---- fonts & theme helpers
+const loadedFonts = new Set();
+function loadGoogleFonts(names) {
+  const todo = [...new Set(names.filter(Boolean))].filter((n) => !loadedFonts.has(n) && S.config.fonts.some((f) => f.name === n));
+  if (!todo.length) return;
+  todo.forEach((n) => loadedFonts.add(n));
+  const q = todo.map((n) => `family=${encodeURIComponent(n).replace(/%20/g, '+')}:wght@${S.config.fonts.find((f) => f.name === n).weights.join(';')}`).join('&');
+  document.head.insertAdjacentHTML('beforeend', `<link rel="stylesheet" href="https://fonts.googleapis.com/css2?${q}&display=swap">`);
+}
+function fontOptions(current) {
+  const cats = { sans: 'Sans-serif', display: 'Display / headline', serif: 'Serif' };
+  const list = S.config.fonts;
+  const extra = current && !list.some((f) => f.name === current) ? `<option selected value="${esc(current)}">${esc(current)} (not in library — system font used)</option>` : '';
+  return extra + Object.entries(cats).map(([k, label]) => `<optgroup label="${label}">${list.filter((f) => f.cat === k).map((f) => `<option value="${esc(f.name)}" ${f.name === current ? 'selected' : ''}>${esc(f.name)} — ${esc(f.vibe)}</option>`).join('')}</optgroup>`).join('');
+}
+const suggestedPairing = (w) => S.config.pairings.find((pp) => pp.tones.includes(w.locale?.tone || 'friendly'));
+function brandPreview(w, fonts = w.brand?.fonts || {}, colors = w.brand?.colors || {}) {
+  loadGoogleFonts([fonts.heading, fonts.body, ...S.config.pairings.map((pp) => pp.heading)]);
+  const fg = lumHex(colors.primary) > 0.45 ? '#111418' : '#fff';
+  const onA = lumHex(colors.accent) > 0.45 ? '#111418' : '#fff';
+  return `<div class="brand-preview" id="brandPreview" style="background:linear-gradient(135deg,${esc(colors.primary || '#1F2A44')},${esc(colors.secondary || '#3B4C7A')});color:${fg}">
+    <div style="font-family:'${esc(fonts.heading || 'Inter')}',sans-serif;font-weight:800;font-size:26px;line-height:1.1">${esc(w.tagline || w.name || 'Your headline here')}</div>
+    <div style="font-family:'${esc(fonts.body || 'Inter')}',sans-serif;font-size:14px;opacity:.88;margin:8px 0 12px">${esc((w.value_props || [])[0] || 'Body text in your brand font, exactly as it appears in flyers and videos.')}</div>
+    <span style="font-family:'${esc(fonts.body || 'Inter')}',sans-serif;font-weight:700;background:${esc(colors.accent || '#FFB547')};color:${onA};padding:6px 14px;border-radius:999px;font-size:13px">Try it free →</span></div>`;
+}
+function lumHex(hex) {
+  const n = parseInt(String(hex || '#000').replace('#', '').padEnd(6, '0').slice(0, 6), 16);
+  const [r, g, b] = [(n >> 16) & 255, (n >> 8) & 255, n & 255].map((v) => ((v /= 255) <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+function siteThemeCard(w) {
+  const sg = w.source_meta?.brandSuggestion;
+  if (!sg || (!sg.colors && !sg.fonts)) return `<div class="full muted small">Tip: import your website above and LaunchLoop will suggest colours and fonts that match it.</div>`;
+  return `<div class="full callout info" style="align-items:center"><div><b>Theme from your website</b>
+    <div class="row" style="margin-top:6px">${sg.colors ? Object.entries(sg.colors).map(([k, v]) => `<span class="swatch" title="${k} ${esc(v)}" style="background:${esc(v)}"></span>`).join('') : ''}
+    ${sg.fonts ? `<span class="small">Fonts: <b>${esc(sg.fonts.heading)}</b> + <b>${esc(sg.fonts.body)}</b></span>` : sg.detectedFonts?.length ? `<span class="small muted">Site uses ${esc(sg.detectedFonts.slice(0, 2).join(', '))} (not in the font library — pick the closest pairing)</span>` : ''}</div></div>
+    <button type="button" class="btn sm" data-action="apply-site-theme">Apply site theme</button></div>`;
+}
+
+function updateBrandPreview() {
+  const f = $('form[data-form=workspace]');
+  const el = $('#brandPreview');
+  if (!f || !el) return;
+  const fd = new FormData(f);
+  const fonts = { heading: fd.get('font_heading'), body: fd.get('font_body') };
+  const colors = { primary: fd.get('color_primary'), secondary: fd.get('color_secondary'), accent: fd.get('color_accent') };
+  el.outerHTML = brandPreview({ ...S.ws, ...Object.fromEntries(['tagline', 'name'].map((k) => [k, fd.get(k)])) }, fonts, colors);
+}
+async function downscaleImage(file, max = 1920) {
+  const bmp = await createImageBitmap(file);
+  const scale = Math.min(1, max / Math.max(bmp.width, bmp.height));
+  const canvas = Object.assign(document.createElement('canvas'), { width: Math.round(bmp.width * scale), height: Math.round(bmp.height * scale) });
+  canvas.getContext('2d').drawImage(bmp, 0, 0, canvas.width, canvas.height);
+  const png = file.type === 'image/png' ? canvas.toDataURL('image/png') : null;
+  return png && png.length < 5_500_000 ? png : canvas.toDataURL('image/jpeg', 0.9);
+}
+async function uploadMedia(file, label) {
+  const dataUrl = await downscaleImage(file);
+  return api('POST', `/api/workspaces/${S.wsId}/media`, { name: file.name, label: label || file.name.replace(/\.[a-z0-9]+$/i, '').replace(/[-_]+/g, ' '), dataUrl });
+}
+
+// ---- scene media (mirror of server resolveSceneMedia)
+const STOPW = new Set(['with', 'your', 'that', 'this', 'from', 'into', 'then', 'they', 'them', 'have', 'more', 'than', 'just', 'what', 'when', 'will', 'shot', 'screen', 'recording', 'visual', 'showing', 'product', 'scene']);
+const wordSet = (t) => new Set(String(t || '').toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').split(/\s+/).filter((x) => x.length > 3 && !STOPW.has(x)));
+function resolveSceneMedia(scene, index, library) {
+  const choice = scene.media?.id;
+  if (choice === 'none') return null;
+  if (choice && choice !== 'auto') {
+    const item = library.find((m) => m.id === choice);
+    if (item) return { item, fit: scene.media.fit || 'contain', zoom: scene.media.zoom !== false, auto: false };
+  }
+  if (!library.length || scene.type === 'cta') return null;
+  const sw = wordSet(`${scene.onScreenText} ${scene.vo} ${scene.visual} ${scene.shot}`);
+  let best = null;
+  let bs = 0;
+  for (const m of library) {
+    const sc = [...wordSet(`${m.label} ${m.name}`)].filter((x) => sw.has(x)).length;
+    if (sc > bs) (best = m), (bs = sc);
+  }
+  return { item: best || library[index % library.length], fit: scene.media?.fit || 'contain', zoom: scene.media?.zoom !== false, auto: true, matched: !!best };
+}
+function mediaSelect(attrs, current, { allowAuto = true, defaultLabel = 'Auto (match by label)' } = {}) {
+  return `<select ${attrs}>${allowAuto ? `<option value="auto" ${!current || current === 'auto' ? 'selected' : ''}>${defaultLabel}</option>` : ''}<option value="none" ${current === 'none' ? 'selected' : ''}>No image (brand background)</option>${(S.media || []).map((m) => `<option value="${esc(m.id)}" ${m.id === current ? 'selected' : ''}>${esc(m.label || m.name)}</option>`).join('')}</select>`;
+}
+
 const featRow = (f = {}) => `<div class="feat-row"><input type="text" data-feat="name" placeholder="Feature" value="${esc(f.name)}"><input type="text" data-feat="benefit" placeholder="Benefit" value="${esc(f.benefit)}"><button type="button" class="btn ghost sm" data-action="remove-feature">×</button></div>`;
 function channelRow(c) {
   const def = ch(c.channel);
@@ -493,14 +585,24 @@ async function openAsset(assetId, slide = 0) {
   let formatFields = '';
   if (a.format === 'reel' || a.format === 'video') {
     formatFields = `<h3 style="margin-top:14px">Script & storyboard <span class="muted small">${c.durationSec}s · ${esc(c.musicMood || '')}</span></h3>
-      <div class="card" style="padding:10px 14px">${(c.storyboard || []).map((s, i) => `<div class="sb-row"><div class="mono">${s.start}–${s.end}s<br><span class="badge b-mute">${esc(s.type)}</span></div><div><input type="text" data-sb="${i}" data-k="onScreenText" value="${esc(s.onScreenText)}" ${locked ? 'disabled' : ''} style="font-weight:600;margin-bottom:4px"><div class="muted small"><b>Shot:</b> ${esc(s.shot)} · <b>Visual:</b> ${esc(s.visual)}</div><textarea data-sb="${i}" data-k="vo" rows="2" ${locked ? 'disabled' : ''} style="min-height:44px;margin-top:4px">${esc(s.vo)}</textarea></div></div>`).join('')}</div>
+      <p class="muted small" style="margin:0 0 6px">Choose exactly which screenshot or picture appears in each scene. Upload more in <b>Product source → Media library</b>, or right here.</p>
+      <div class="card" style="padding:10px 14px">${(c.storyboard || []).map((s, i) => {
+        const r = resolveSceneMedia(s, i, S.media || []);
+        return `<div class="sb-row sb-media-row"><div class="mono">${s.start}–${s.end}s<br><span class="badge b-mute">${esc(s.type)}</span></div><div><input type="text" data-sb="${i}" data-k="onScreenText" value="${esc(s.onScreenText)}" ${locked ? 'disabled' : ''} style="font-weight:600;margin-bottom:4px"><div class="muted small"><b>Shot:</b> ${esc(s.shot)} · <b>Visual:</b> ${esc(s.visual)}</div><textarea data-sb="${i}" data-k="vo" rows="2" ${locked ? 'disabled' : ''} style="min-height:44px;margin-top:4px">${esc(s.vo)}</textarea>
+          <div class="scene-media"><div class="scene-thumb">${r ? `<img src="${esc(r.item.url)}" alt="" style="object-fit:${r.fit === 'cover' ? 'cover' : 'contain'}">` : '<span>brand<br>background</span>'}</div>
+            <div class="stack" style="gap:6px;flex:1"><div class="row" style="flex-wrap:nowrap;gap:6px">${mediaSelect(`data-sbm="${i}" data-k="id" ${locked ? 'disabled' : ''}`, s.media?.id)}
+              <select data-sbm="${i}" data-k="fit" ${locked ? 'disabled' : ''} style="width:150px"><option value="contain" ${(s.media?.fit || 'contain') === 'contain' ? 'selected' : ''}>Show whole image</option><option value="cover" ${s.media?.fit === 'cover' ? 'selected' : ''}>Fill the frame</option></select></div>
+              <div class="row small" style="gap:12px"><label class="check"><input type="checkbox" data-sbm="${i}" data-k="zoom" ${s.media?.zoom !== false ? 'checked' : ''} ${locked ? 'disabled' : ''}> slow zoom</label>
+              ${r?.auto ? `<span class="muted">${r.matched ? 'auto-matched by label' : 'auto (no label matched — pick one)'}</span>` : ''}
+              ${locked ? '' : `<label class="link small" style="cursor:pointer">+ upload for this scene<input type="file" accept="image/*" data-upload="scene-media" data-asset="${a.id}" data-scene="${i}" hidden></label>`}</div></div></div></div></div>`;
+      }).join('')}</div>
       <div class="row" style="margin-top:8px"><button type="button" class="btn ghost sm" data-action="render-job" data-id="${a.id}">View render job JSON</button><span class="muted small">Feed to Remotion / FFmpeg / a render API to produce the MP4.</span></div>`;
   } else if (a.format === 'flyer') {
-    formatFields = `<div class="form-grid" style="margin-top:10px"><label class="f full">Subhead<input type="text" name="c_subhead" value="${esc(c.subhead)}" ${locked ? 'disabled' : ''}></label><label class="f full">Value props <span class="hint">one per line (max 3)</span><textarea name="c_valueProps" rows="3" ${locked ? 'disabled' : ''}>${esc((c.valueProps || []).join('\n'))}</textarea></label><label class="f">Badge / offer<input type="text" name="c_badge" value="${esc(c.badge || '')}" ${locked ? 'disabled' : ''}></label></div>`;
+    formatFields = `<div class="form-grid" style="margin-top:10px"><label class="f full">Subhead<input type="text" name="c_subhead" value="${esc(c.subhead)}" ${locked ? 'disabled' : ''}></label><label class="f full">Value props <span class="hint">one per line (max 3)</span><textarea name="c_valueProps" rows="3" ${locked ? 'disabled' : ''}>${esc((c.valueProps || []).join('\n'))}</textarea></label><label class="f">Badge / offer<input type="text" name="c_badge" value="${esc(c.badge || '')}" ${locked ? 'disabled' : ''}></label>${imagePicker(c, locked)}</div>`;
   } else if (a.format === 'carousel') {
     formatFields = `<h3 style="margin-top:14px">Slides</h3>${(c.slides || []).map((s, i) => `<div class="feat-row" style="grid-template-columns:28px 1fr 1.6fr"><span class="mono" style="padding-top:8px">${i + 1}</span><input type="text" data-slide="${i}" data-k="title" value="${esc(s.title)}" ${locked ? 'disabled' : ''}><input type="text" data-slide="${i}" data-k="body" value="${esc(s.body)}" ${locked ? 'disabled' : ''}></div>`).join('')}`;
   } else if (a.format === 'post') {
-    formatFields = `<div class="form-grid" style="margin-top:10px"><label class="f">Image headline<input type="text" name="c_imageHeadline" value="${esc(c.imageHeadline || '')}" ${locked ? 'disabled' : ''}></label><label class="f">Image subline<input type="text" name="c_imageSub" value="${esc(c.imageSub || '')}" ${locked ? 'disabled' : ''}></label></div>`;
+    formatFields = `<div class="form-grid" style="margin-top:10px"><label class="f">Image headline<input type="text" name="c_imageHeadline" value="${esc(c.imageHeadline || '')}" ${locked ? 'disabled' : ''}></label><label class="f">Image subline<input type="text" name="c_imageSub" value="${esc(c.imageSub || '')}" ${locked ? 'disabled' : ''}></label>${imagePicker(c, locked)}</div>`;
   }
   const slides = a.format === 'carousel' ? c.slides?.length || 0 : 0;
   openModal(`${modalHead(esc(a.title), badge(a.state) + scorePill(sc))}
@@ -535,6 +637,11 @@ async function openAsset(assetId, slide = 0) {
       <div class="muted small">Generated by ${esc(a.generator || 'unknown')} · v${a.version} · ${esc(a.channel)} ${esc(a.aspect_ratio)}</div>
     </form>
   </div></div>`);
+}
+
+function imagePicker(c, locked) {
+  return `<label class="f">Picture${mediaSelect(`name="c_media_id" ${locked ? 'disabled' : ''}`, c.media?.id, { defaultLabel: 'Default (first screenshot)' })}</label>
+    <label class="f">Picture fit<select name="c_media_fit" ${locked ? 'disabled' : ''}><option value="cover" ${(c.media?.fit || 'cover') === 'cover' ? 'selected' : ''}>Fill the frame</option><option value="contain" ${c.media?.fit === 'contain' ? 'selected' : ''}>Show whole image</option></select></label>`;
 }
 
 async function openShareKit(assetId) {
@@ -670,6 +777,26 @@ const actions = {
   async png(el) {
     await svgToPng(el.dataset.src, el.dataset.name);
   },
+  'font-change'() {
+    updateBrandPreview();
+  },
+  async 'apply-pairing'(el) {
+    S.ws = await api('PATCH', `/api/workspaces/${S.wsId}`, { brand: { ...S.ws.brand, fonts: { heading: el.dataset.h, body: el.dataset.b } } });
+    toast(`Fonts set to ${el.dataset.h} + ${el.dataset.b}`, 'ok');
+    render();
+  },
+  async 'apply-site-theme'() {
+    const sg = S.ws.source_meta?.brandSuggestion || {};
+    S.ws = await api('PATCH', `/api/workspaces/${S.wsId}`, { brand: { ...S.ws.brand, ...(sg.colors ? { colors: sg.colors } : {}), ...(sg.fonts ? { fonts: sg.fonts } : {}) } });
+    toast('Applied your website’s colours and fonts', 'ok');
+    render();
+  },
+  async 'delete-media'(el) {
+    if (!confirm('Delete this image? Scenes using it will fall back to auto.')) return;
+    await api('DELETE', `/api/media/${el.dataset.id}`);
+    S.media = await api('GET', `/api/workspaces/${S.wsId}/media`);
+    render();
+  },
   'record-video'(el) {
     openVideoSettings(el.dataset.id);
   },
@@ -720,6 +847,7 @@ const actions = {
   async 'remove-shot'(el) {
     const shots = S.ws.screenshots.filter((_, i) => i !== Number(el.dataset.i));
     S.ws = await api('PATCH', `/api/workspaces/${S.wsId}`, { screenshots: shots });
+    S.media = await api('GET', `/api/workspaces/${S.wsId}/media`);
     render();
   },
   async 'channel-mode'(el) {
@@ -828,6 +956,7 @@ const forms = {
     const content = {};
     if (a.format === 'flyer') Object.assign(content, { subhead: fd.get('c_subhead'), valueProps: String(fd.get('c_valueProps') || '').split('\n').map((s) => s.trim()).filter(Boolean).slice(0, 3), badge: fd.get('c_badge') || null });
     if (a.format === 'post') Object.assign(content, { imageHeadline: fd.get('c_imageHeadline'), imageSub: fd.get('c_imageSub') });
+    if ((a.format === 'post' || a.format === 'flyer') && fd.has('c_media_id')) content.media = { id: fd.get('c_media_id') === 'auto' ? null : fd.get('c_media_id'), fit: fd.get('c_media_fit') };
     if (a.format === 'carousel') {
       const slides = (a.content.slides || []).map((s) => ({ ...s }));
       f.querySelectorAll('[data-slide]').forEach((i) => (slides[i.dataset.slide][i.dataset.k] = i.value));
@@ -836,6 +965,10 @@ const forms = {
     if (a.format === 'reel' || a.format === 'video') {
       const sb = (a.content.storyboard || []).map((s) => ({ ...s }));
       f.querySelectorAll('[data-sb]').forEach((i) => (sb[i.dataset.sb][i.dataset.k] = i.value));
+      f.querySelectorAll('[data-sbm]').forEach((i) => {
+        const sc = sb[i.dataset.sbm];
+        sc.media = { ...(sc.media || {}), [i.dataset.k]: i.type === 'checkbox' ? i.checked : i.value };
+      });
       content.storyboard = sb;
       content.voiceover = sb.map((s) => s.vo).join(' ');
       content.captions = sb.map((s) => ({ start: s.start, end: s.end, text: s.vo }));
@@ -1156,7 +1289,20 @@ async function recordVideo(assetId, opts, actx, onProgress) {
   const hFont = `'${brand.fonts?.heading || 'Inter'}', Inter, 'Helvetica Neue', Arial, sans-serif`;
   const bFont = `'${brand.fonts?.body || 'Inter'}', Inter, 'Helvetica Neue', Arial, sans-serif`;
   const logo = brand.logo ? await loadImg(brand.logo) : null;
-  const shots = (await Promise.all((S.ws.screenshots || []).map((x) => loadImg(x.dataUrl)))).filter(Boolean);
+  // Brand fonts: self-hosted by the server so canvas text uses the real typeface.
+  onProgress?.('Loading fonts & images…');
+  if (!document.getElementById('wsFonts-' + S.ws.id)) {
+    await new Promise((res) => {
+      const l = Object.assign(document.createElement('link'), { rel: 'stylesheet', id: 'wsFonts-' + S.ws.id, href: `/api/workspaces/${S.ws.id}/fonts.css` });
+      l.onload = l.onerror = res;
+      document.head.appendChild(l);
+    });
+  }
+  await Promise.all([document.fonts.load(`800 40px '${brand.fonts?.heading || 'Inter'}'`), document.fonts.load(`600 40px '${brand.fonts?.body || 'Inter'}'`), document.fonts.load(`400 40px '${brand.fonts?.body || 'Inter'}'`)]).catch(() => {});
+  const library = S.media || [];
+  const sceneMedia = sb.map((s, i) => resolveSceneMedia(s, i, library));
+  const imgCache = {};
+  for (const r of sceneMedia) if (r && !imgCache[r.item.id]) imgCache[r.item.id] = await loadImg(r.item.url);
   let domain = '';
   try {
     domain = new URL(S.campaign?.base_url || S.ws.website_url).hostname.replace(/^www\./, '');
@@ -1219,7 +1365,8 @@ async function recordVideo(assetId, opts, actx, onProgress) {
     const subY = H - pad * 1.3 - subH;
     // media area
     const areaH = subY - y - pad * 0.5;
-    const shot = shots.length ? shots[idx % shots.length] : null;
+    const sm = sceneMedia[idx];
+    const shot = sm ? imgCache[sm.item.id] : null;
     if (isCta) {
       let cfs = M * 0.052;
       const label = unlink(a.cta).replace(/\s*\(link in bio\)/i, '') + ' →';
@@ -1259,15 +1406,23 @@ async function recordVideo(assetId, opts, actx, onProgress) {
       rrect(ctx, fx, fy, fw, fh, M * 0.025);
       ctx.clip();
       if (shot) {
-        if (s.type === 'hook') ctx.filter = 'blur(6px) brightness(0.55)';
-        const zoom = 1 + 0.08 * p;
-        const scale = Math.max(fw / shot.width, fh / shot.height) * zoom;
+        const zoom = sm.zoom ? 1 + 0.08 * p : 1;
+        const cover = Math.max(fw / shot.width, fh / shot.height);
+        const contain = Math.min(fw / shot.width, fh / shot.height);
+        if (sm.fit !== 'cover') {
+          // Show the whole screenshot: blurred fill behind, full image in front.
+          ctx.filter = 'blur(18px) brightness(0.6)';
+          ctx.drawImage(shot, fx + (fw - shot.width * cover) / 2, fy + (fh - shot.height * cover) / 2, shot.width * cover, shot.height * cover);
+          ctx.filter = 'none';
+        }
+        const scale = (sm.fit === 'cover' ? cover : contain) * zoom;
         const iw = shot.width * scale;
         const ih = shot.height * scale;
-        if (s.type === 'problem') ctx.filter = 'grayscale(0.85) brightness(0.8)';
-        ctx.drawImage(shot, fx + (fw - iw) / 2, fy + (fh - ih) * 0.2, iw, ih);
+        if (s.type === 'hook' && sm.auto) ctx.filter = 'blur(6px) brightness(0.55)';
+        if (s.type === 'problem' && sm.auto) ctx.filter = 'grayscale(0.85) brightness(0.8)';
+        ctx.drawImage(shot, fx + (fw - iw) / 2, sm.fit === 'cover' ? fy + (fh - ih) * 0.2 : fy + (fh - ih) / 2, iw, ih);
         ctx.filter = 'none';
-        if (s.type === 'proof') {
+        if (s.type === 'proof' && sm.auto) {
           ctx.font = `800 ${M * 0.036}px ${bFont}`;
           ctx.textAlign = 'left';
           ctx.textBaseline = 'middle';
@@ -1400,6 +1555,45 @@ document.addEventListener('change', async (e) => {
   if (el.id === 'cmpSelect') {
     S.cmpId = el.value;
     return loadCampaign();
+  }
+  if (el.dataset.mediaLabel) {
+    await api('PATCH', `/api/media/${el.dataset.mediaLabel}`, { label: el.value }).catch((err) => toast(err.message, 'bad'));
+    const m = (S.media || []).find((x) => x.id === el.dataset.mediaLabel);
+    if (m) m.label = el.value;
+    return toast('Label saved');
+  }
+  if (el.name?.startsWith('color_')) return updateBrandPreview();
+  if (el.dataset.upload === 'media') {
+    const files = [...el.files];
+    if (!files.length) return;
+    toast(`Uploading ${files.length} image(s)…`);
+    for (const file of files) await uploadMedia(file).catch((err) => toast(`${file.name}: ${err.message}`, 'bad'));
+    S.media = await api('GET', `/api/workspaces/${S.wsId}/media`);
+    toast('Uploaded — add a label to each so scenes can match them', 'ok');
+    return render();
+  }
+  if (el.dataset.upload === 'scene-media') {
+    const file = el.files[0];
+    if (!file) return;
+    const row = el.closest('.sb-row');
+    const label = row?.querySelector('[data-k=onScreenText]')?.value || '';
+    try {
+      const m = await uploadMedia(file, label);
+      S.media = await api('GET', `/api/workspaces/${S.wsId}/media`);
+      const sel = row.querySelector('select[data-k=id]');
+      sel.insertAdjacentHTML('beforeend', `<option value="${esc(m.id)}">${esc(m.label || m.name)}</option>`);
+      sel.value = m.id;
+      row.querySelector('.scene-thumb').innerHTML = `<img src="${esc(m.url)}" alt="" style="object-fit:contain">`;
+      toast('Image added to this scene — click Save changes', 'ok');
+    } catch (err) {
+      toast(err.message, 'bad');
+    }
+    return;
+  }
+  if (el.dataset.sbm !== undefined && el.dataset.k === 'id') {
+    const m = (S.media || []).find((x) => x.id === el.value);
+    el.closest('.sb-row').querySelector('.scene-thumb').innerHTML = m ? `<img src="${esc(m.url)}" alt="" style="object-fit:contain">` : el.value === 'none' ? '<span>brand<br>background</span>' : '<span>auto</span>';
+    return;
   }
   if (el.dataset.upload) {
     const file = el.files[0];
