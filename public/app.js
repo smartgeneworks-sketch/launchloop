@@ -609,7 +609,7 @@ function zonedToUtcClient(date, time, tz = wsTz()) {
   utc = guess - off(utc);
   return new Date(utc).toISOString();
 }
-const CH_COLOR = { instagram: '#c13584', tiktok: '#111111', youtube_shorts: '#d93025', linkedin: '#0a66c2', x: '#3d3d3d', facebook: '#1877f2', threads: '#5b5b5b', reddit: '#ff4500', product_hunt: '#da552f' };
+const CH_COLOR = { instagram: '#c13584', tiktok: '#111111', youtube_shorts: '#d93025', linkedin: '#0a66c2', x: '#3d3d3d', facebook: '#1877f2', threads: '#5b5b5b', reddit: '#ff4500', product_hunt: '#da552f', whatsapp_status: '#128c7e', whatsapp: '#25d366', telegram: '#229ed9' };
 const addDays = (date, n) => new Date(Date.parse(date + 'T12:00:00Z') + n * 86400000).toISOString().slice(0, 10);
 
 function viewCalendar() {

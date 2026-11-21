@@ -112,7 +112,7 @@ export function updateChannel({ db, config }, chnId, patch = {}) {
   return db.update('channel_connections', chnId, out);
 }
 
-const LIVE_CREDS = { x: ['X_USER_ACCESS_TOKEN'], linkedin: ['LINKEDIN_ACCESS_TOKEN', 'LINKEDIN_AUTHOR_URN'] };
+const LIVE_CREDS = { x: ['X_USER_ACCESS_TOKEN'], linkedin: ['LINKEDIN_ACCESS_TOKEN', 'LINKEDIN_AUTHOR_URN'], telegram: ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID'] };
 /** Live mode: a channel counts as connected only when its credentials are configured and a live adapter exists. */
 export const hasLiveCreds = (channel, env = {}) => !!LIVE_CREDS[channel]?.every((k) => env[k]);
 function apiStatus(config, channel) {
@@ -120,6 +120,13 @@ function apiStatus(config, channel) {
   return hasLiveCreds(channel, config.env) ? 'connected' : 'disconnected';
 }
 export function syncChannelStatuses({ db, config }) {
+  // Backfill connection rows for channels added after a workspace was created.
+  for (const ws of db.all(null, 'SELECT id, name FROM workspaces')) {
+    for (const [ch, def] of Object.entries(CHANNELS)) {
+      if (connectionFor(db, ws.id, ch)) continue;
+      db.insert('channel_connections', { id: id('chn'), workspace_id: ws.id, channel: ch, mode: def.defaultMode, status: def.defaultMode === 'api' ? apiStatus(config, ch) : 'connected', account_label: def.defaultMode === 'api' ? ws.name : 'Share Kit', auto_publish: def.defaultMode === 'api', token_ref: null });
+    }
+  }
   for (const c of db.all('channel_connections', `SELECT * FROM channel_connections WHERE mode = 'api'`)) {
     const status = apiStatus(config, c.channel);
     if (status !== c.status) db.update('channel_connections', c.id, { status, account_label: status === 'connected' ? 'Connected via env credentials' : status === 'mock' ? 'mock' : 'Not connected — add credentials' });
@@ -611,6 +618,9 @@ export function shareKit({ db, config }, assetId) {
     instagram: ['Open Instagram → + → Reel/Post', 'Upload the exported media (keep the aspect ratio)', 'Paste the caption; put the tracked link in your bio / link sticker', 'Share to Story with a link sticker for extra reach'],
     tiktok: ['Render the video from the render job (or film it following the storyboard)', 'Upload in TikTok, add on-screen text from the script', 'Paste the caption; link in bio', 'Pin a comment with the share prompt'],
     reddit: ['Read the subreddit rules on self-promotion first', 'Create a text post using the copy (be transparent you are the maker)', 'Add the tracked link once, at the end', 'Reply to every comment for the first 2 hours'],
+    whatsapp_status: ['Download the vertical media (PNG for flyers, MP4 via “Download video” for reels)', 'Send it to your phone (e.g. WhatsApp yourself or AirDrop/Drive)', 'Open WhatsApp → Updates → My status → add the media', 'Paste the short caption — the tracked link stays clickable', 'Reply to everyone who responds to the status'],
+    whatsapp: ['Download the square image (PNG)', 'Open your WhatsApp Channel (or a group where promotion is welcome)', 'Attach the image and paste the message as its caption', 'Ask a few friends to forward it — the message is written to be forwarded', 'Answer replies quickly; never add people to groups without their consent'],
+    telegram: ['Open your Telegram channel', 'Paste the post (keep the link on its own line so Telegram shows the preview)', 'Optionally attach the image or video', 'Pin it if it is your launch post', 'Reply in the comments/discussion group'],
     product_hunt: ['Upload gallery images (1270×760 works well; exports are 16:9)', 'Paste the tagline and first comment', 'Add the tracked link as the website URL', 'Share the PH link with your community at launch'],
   }[asset.channel] || ['Open the platform composer', 'Upload the exported media', 'Paste the caption (tracked link included)', 'Post, then click “Mark as published” here'];
   return {

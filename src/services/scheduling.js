@@ -17,6 +17,9 @@ export const SUGGESTED_TIMES = {
   threads: '12:30',
   reddit: '09:00',
   product_hunt: '08:05', // Product Hunt's day starts 00:01 Pacific; adjust for your time zone
+  whatsapp_status: '07:30',
+  whatsapp: '18:30',
+  telegram: '12:30',
 };
 export const WEEKDAY_ONLY = ['linkedin'];
 

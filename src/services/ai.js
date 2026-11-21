@@ -125,7 +125,7 @@ ${String(text || extracted.text || '').slice(0, 7000)}`);
         post: '"content":{"hook":string,"angleName":string,"imageHeadline":string(≤8 words),"imageSub":string}',
         carousel: '"content":{"hook":string,"angleName":string,"slides":[{"title":string,"body":string}] (5-7; slide 1 = hook, last = CTA + share prompt, middle = numbered steps / before→after)}',
       }[format];
-      const out = await this.json(`Create one ${FORMATS[format].label} for ${ch.label} (aspect ${ch.formats[format]}, caption limit ${ch.captionLimit} chars, max ${ch.hashtagLimit} hashtags${ch.linkInCaption ? '' : ', links are not clickable in captions so say "link in bio"'}).
+      const out = await this.json(`Create one ${FORMATS[format].label} for ${ch.label} (aspect ${ch.formats[format]}, caption limit ${ch.captionLimit} chars, max ${ch.hashtagLimit} hashtags${ch.linkInCaption ? '' : ', links are not clickable in captions so say "link in bio"'}).${ch.guidance ? `\nChannel style: ${ch.guidance}` : ''}
 Return JSON: {"title":string,"headline":string,"caption":string,"cta":string,"hashtags":[string], ${shape}}
 Product: ${workspace.name} — ${workspace.tagline || ''}
 Description: ${workspace.description || ''}

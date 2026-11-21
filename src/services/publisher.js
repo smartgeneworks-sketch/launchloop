@@ -60,6 +60,19 @@ const live = {
     const urn = res.headers.get('x-restli-id');
     return { externalId: urn, url: urn ? `https://www.linkedin.com/feed/update/${urn}` : null };
   },
+  /** Telegram Bot API — posts to a channel where the bot is an admin. Text + link preview. */
+  async telegram({ asset, env, fetchImpl }) {
+    if (!env.TELEGRAM_BOT_TOKEN || !env.TELEGRAM_CHAT_ID) throw new ManualRequired('Telegram bot not configured');
+    const res = await fetchImpl(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ chat_id: env.TELEGRAM_CHAT_ID, text: finalCaption(asset).slice(0, 4096), link_preview_options: { is_disabled: false } }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok || !body.ok) throw new Error(`Telegram ${res.status}: ${body.description || 'error'}`);
+    const chat = String(env.TELEGRAM_CHAT_ID);
+    return { externalId: String(body.result?.message_id), url: chat.startsWith('@') ? `https://t.me/${chat.slice(1)}/${body.result?.message_id}` : null };
+  },
   // Instagram, Facebook, YouTube, TikTok and Threads need a rendered media file on
   // a public URL (and, for video, an MP4 render). Until a renderer is wired up these
   // fall through to the Share Kit. See docs/ARCHITECTURE.md → "Going live".

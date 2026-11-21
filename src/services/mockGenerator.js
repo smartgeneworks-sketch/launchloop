@@ -69,7 +69,7 @@ function hashtagsFor(c, channel, r) {
     'Productivity',
     'BuildInPublic',
     'SaaS',
-  ].filter((w) => w && w.length > 2 && w.length < 24);
+  ].filter((w) => w && /^[A-Za-z]/.test(w) && w.length > 2 && w.length < 24);
   const uniq = [...new Set(words)];
   return [uniq[0], ...shuffle(r, uniq.slice(1))].slice(0, limit).map((w) => `#${w}`);
 }
@@ -176,6 +176,18 @@ export function mockAsset({ workspace, campaign, channel, format, version = 1, v
         '',
         `Happy to answer anything. Link: ${link}`,
       ].join('\n');
+    } else if (channel === 'whatsapp') {
+      caption = [
+        `${hook}`,
+        '',
+        `${c.P} ${lower(trimEnd(f.benefit))}.${c.offer ? ` ${c.offer}.` : ''}`,
+        '',
+        `👉 Forward this to someone who's ${lower(trimEnd(pain))}.`,
+        '',
+        link,
+      ].join('\n');
+    } else if (channel === 'telegram') {
+      caption = [`${hook}`, '', ...c.features.slice(0, 3).map((ft) => `• ${ft.name} — ${lower(trimEnd(ft.benefit))}`), '', share, '', link].join('\n');
     } else if (channel === 'product_hunt') {
       headline = trimEnd(c.tagline).slice(0, 60);
       caption = [
@@ -192,6 +204,7 @@ export function mockAsset({ workspace, campaign, channel, format, version = 1, v
     Object.assign(content, { imageHeadline: wordCount(hook) <= 10 ? trimEnd(hook) : f.name, imageSub: trimEnd(f.benefit) });
   }
 
+  if (channel === 'whatsapp_status') caption = [trimEnd(headline) + (/[?!]$/.test(headline) ? '' : '.'), c.offer ? `${c.offer} 👇` : 'Try it 👇', link].filter(Boolean).join('\n');
   if (caption.length > ch.captionLimit) caption = caption.slice(0, ch.captionLimit - 1) + '…';
   if (variationOf) content.variationNote = `Follow-up variation of “${variationOf.title}” using the ${angle.name.toLowerCase()} angle.`;
 

@@ -325,3 +325,35 @@ describe('bulk scheduling', () => {
     assert.equal(ctx.db.byId('creative_assets', review[2].id).state, 'NEEDS_REVIEW');
   });
 });
+
+describe('WhatsApp + Telegram channels', () => {
+  test('existing workspaces get the new channel rows on startup', async () => {
+    const { ctx, workspace } = await setup();
+    ctx.db.run(`DELETE FROM channel_connections WHERE channel IN ('whatsapp','whatsapp_status','telegram')`);
+    core.syncChannelStatuses(ctx);
+    const rows = ctx.db.all('channel_connections', `SELECT * FROM channel_connections WHERE workspace_id = ? AND channel IN ('whatsapp','whatsapp_status','telegram')`, workspace.id);
+    assert.equal(rows.length, 3);
+    assert.equal(rows.find((r) => r.channel === 'whatsapp').mode, 'share_kit');
+    assert.equal(rows.find((r) => r.channel === 'telegram').mode, 'api');
+  });
+
+  test('WhatsApp copy has no hashtags and a forward prompt; package generates for new channels', async () => {
+    const { ctx, campaign } = await setup();
+    const r = await core.generatePackage(ctx, campaign.id, { channels: ['whatsapp', 'whatsapp_status', 'telegram'] });
+    assert.equal(r.created.length, 7);
+    const wa = ctx.db.get('creative_assets', `SELECT * FROM creative_assets WHERE campaign_id = ? AND channel = 'whatsapp' AND format = 'post'`, campaign.id);
+    assert.deepEqual(wa.hashtags, []);
+    assert.match(wa.caption, /Forward this/);
+    const st = ctx.db.get('creative_assets', `SELECT * FROM creative_assets WHERE campaign_id = ? AND channel = 'whatsapp_status' AND format = 'flyer'`, campaign.id);
+    assert.equal(st.aspect_ratio, '9:16');
+  });
+
+  test('Telegram adapter posts text with the tracked link', async () => {
+    const calls = [];
+    const pub = new Publisher({ mode: 'live', env: { TELEGRAM_BOT_TOKEN: 'tok', TELEGRAM_CHAT_ID: '@pb' }, fetchImpl: async (url, o) => (calls.push([url, JSON.parse(o.body)]), new Response(JSON.stringify({ ok: true, result: { message_id: 7 } }))) });
+    const r = await pub.publish({ asset: { channel: 'telegram', caption: 'Hi {{link}}', utm_url: 'https://x.com/?utm_source=telegram', hashtags: [] }, connection: { mode: 'api', status: 'connected' } });
+    assert.match(calls[0][0], /api\.telegram\.org\/bottok\/sendMessage/);
+    assert.equal(calls[0][1].text, 'Hi https://x.com/?utm_source=telegram');
+    assert.equal(r.url, 'https://t.me/pb/7');
+  });
+});

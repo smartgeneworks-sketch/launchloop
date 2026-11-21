@@ -55,19 +55,19 @@ function textBlock(lines, { xPos, y, fs, lh = 1.12, weight = 700, fill, family, 
 }
 const charsFor = (width, fs, k = 0.56) => Math.max(8, Math.floor(width / (fs * k)));
 
-function header(t, W, pad, badge, H = W) {
+function header(t, W, pad, badge, H = W, top = pad) {
   const M = Math.min(W, H);
   const logoH = M * 0.065;
   const logo = t.logo
-    ? `<image href="${x(t.logo)}" x="${pad}" y="${pad}" height="${logoH}" width="${logoH * 4}" preserveAspectRatio="xMinYMid meet"/>`
-    : `<text x="${pad}" y="${pad + logoH * 0.75}" font-family="${x(t.heading)}" font-size="${logoH * 0.7}" font-weight="800" fill="${t.fg}">${x(t.name)}</text>`;
+    ? `<image href="${x(t.logo)}" x="${pad}" y="${top}" height="${logoH}" width="${logoH * 4}" preserveAspectRatio="xMinYMid meet"/>`
+    : `<text x="${pad}" y="${top + logoH * 0.75}" font-family="${x(t.heading)}" font-size="${logoH * 0.7}" font-weight="800" fill="${t.fg}">${x(t.name)}</text>`;
   let b = '';
   if (badge) {
     const fs = M * 0.028;
     const bw = Math.min(W * 0.5, x(badge).length * fs * 0.58 + fs * 2);
-    b = `<g><rect x="${W - pad - bw}" y="${pad}" width="${bw}" height="${fs * 2.2}" rx="${fs * 1.1}" fill="${t.accent}"/><text x="${W - pad - bw / 2}" y="${pad + fs * 1.45}" font-family="${x(t.body)}" font-size="${fs}" font-weight="700" fill="${t.onAccent}" text-anchor="middle">${x(badge.slice(0, 40))}</text></g>`;
+    b = `<g><rect x="${W - pad - bw}" y="${top}" width="${bw}" height="${fs * 2.2}" rx="${fs * 1.1}" fill="${t.accent}"/><text x="${W - pad - bw / 2}" y="${top + fs * 1.45}" font-family="${x(t.body)}" font-size="${fs}" font-weight="700" fill="${t.onAccent}" text-anchor="middle">${x(badge.slice(0, 40))}</text></g>`;
   }
-  return { svg: logo + b, bottom: pad + logoH };
+  return { svg: logo + b, bottom: top + logoH };
 }
 
 function background(t, W, H, aiBg) {
@@ -108,7 +108,10 @@ export function renderImageSvg(asset, workspace, { images = {} } = {}) {
   const sub = isFlyer ? c.subhead : c.imageSub;
   const props = isFlyer ? (c.valueProps || []).slice(0, 3) : [];
   const colW = landscape ? (t.screenshot ? W * 0.55 : W - pad * 2) : W - pad * 2;
-  const hdr = header(t, W, pad, isFlyer ? c.badge : null, H);
+  const tall = H / W > 1.6; // 9:16 — keep clear of Status/Reels UI at the top and bottom
+  const safeTop = tall ? H * 0.06 : 0;
+  const safeBottom = tall ? H * 0.09 : 0;
+  const hdr = header(t, W, pad, isFlyer ? c.badge : null, H, pad + safeTop);
   let y = hdr.bottom + pad * (landscape ? 0.8 : 1.1);
   const parts = [background(t, W, H, c.backgroundImage), hdr.svg];
 
@@ -138,11 +141,11 @@ export function renderImageSvg(asset, workspace, { images = {} } = {}) {
     y += tb.height + pfs * 0.6;
   }
 
-  const ctaY = H - pad - W * 0.034 * 2.4 - (c.footer ? W * 0.04 : 0);
+  const ctaY = H - pad - safeBottom - W * 0.034 * 2.4 - (c.footer ? W * 0.04 : 0);
   if (landscape) parts.push(screenshotFrame(t, W * 0.6, pad * 1.6, W * 0.4 - pad, H - pad * 3.2));
   else parts.push(screenshotFrame(t, pad, y + pad * 0.3, W - pad * 2, ctaY - y - pad * 1.0));
   parts.push(ctaPill(t, asset.cta, pad, ctaY, W).svg);
-  if (c.footer) parts.push(`<text x="${pad}" y="${H - pad * 0.6}" font-family="${x(t.body)}" font-size="${W * 0.024}" fill="${t.fg}" opacity="0.7">${x(c.footer)}</text>`);
+  if (c.footer) parts.push(`<text x="${pad}" y="${H - pad * 0.6 - safeBottom}" font-family="${x(t.body)}" font-size="${W * 0.024}" fill="${t.fg}" opacity="0.7">${x(c.footer)}</text>`);
 
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}">${parts.join('')}</svg>`;
 }
