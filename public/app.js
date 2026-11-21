@@ -15,7 +15,10 @@ const S = {
   ui: { studioFormat: 'all', studioState: 'all', taskCat: 'all', taskView: 'timeline', hideDone: false },
 };
 const STATE_LABEL = { DRAFT: 'Draft', NEEDS_REVIEW: 'Needs review', NEEDS_REVISION: 'Needs revision', APPROVED: 'Approved', SCHEDULED: 'Scheduled', PUBLISHED: 'Published', FAILED: 'Failed' };
-const STATE_COLOR = { DRAFT: '#cfc9bf', NEEDS_REVIEW: '#2f5fb3', NEEDS_REVISION: '#b7791f', APPROVED: '#1f8a5b', SCHEDULED: '#6b4fc4', PUBLISHED: '#16191e', FAILED: '#c4362c' };
+const STATE_COLOR =
+  document.documentElement.dataset.theme === 'nuance'
+    ? { DRAFT: '#d5d8d6', NEEDS_REVIEW: '#6487bf', NEEDS_REVISION: '#e3a54e', APPROVED: '#96b1ad', SCHEDULED: '#57739e', PUBLISHED: '#1d3140', FAILED: '#a3392f' }
+    : { DRAFT: '#cfc9bf', NEEDS_REVIEW: '#2f5fb3', NEEDS_REVISION: '#b7791f', APPROVED: '#1f8a5b', SCHEDULED: '#6b4fc4', PUBLISHED: '#16191e', FAILED: '#c4362c' };
 const CAT_CLASS = (c) => 'cat-' + c.split(/[ /]/)[0];
 
 // ------------------------------------------------------------------ utils
@@ -166,7 +169,8 @@ function renderModes() {
     <div class="mode-pill"><span><span class="dot ${err ? 'bad' : h.ai.provider !== 'mock' ? 'live' : ''}"></span>AI</span><b>${esc(h.ai.provider)}${h.ai.model ? ' · ' + esc(h.ai.model) : ''}</b></div>
     ${err ? `<div class="ai-warn" title="${esc(err.message)}">⚠ AI request failed (${esc(err.message)}) — creatives fell back to templates. ${esc(err.hint || '')}</div>` : ''}
     <div class="mode-pill"><span><span class="dot ${h.publishMode === 'live' ? 'live' : ''}"></span>Publishing</span><b>${esc(h.publishMode)}</b></div>
-    <div class="mode-pill"><span>Scheduler</span><b>every ${Math.round(h.worker.intervalMs / 1000)}s</b></div>`;
+    <div class="mode-pill"><span>Scheduler</span><b>every ${Math.round(h.worker.intervalMs / 1000)}s</b></div>
+    <div class="theme-switch" title="App theme">${[['classic', 'Classic'], ['nuance', 'Nuance']].map(([k, l]) => `<button data-action="set-theme" data-v="${k}" class="${(document.documentElement.dataset.theme || 'classic') === k ? 'on' : ''}">${l}</button>`).join('')}</div>`;
 }
 function renderSelectors() {
   $('#wsSelect').innerHTML = S.workspaces.map((w) => `<option value="${w.id}" ${w.id === S.wsId ? 'selected' : ''}>${esc(w.name)}</option>`).join('');
@@ -840,6 +844,11 @@ const actions = {
   },
   async png(el) {
     await svgToPng(el.dataset.src, el.dataset.name);
+  },
+  'set-theme'(el) {
+    localStorage.setItem('ll_theme', el.dataset.v);
+    history.replaceState(null, '', location.pathname + location.hash);
+    location.reload();
   },
   'region-change'(el) {
     const c = currencyFor(el.value);
