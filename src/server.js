@@ -18,7 +18,7 @@ import { Publisher } from './services/publisher.js';
 import { scoreAsset } from './services/scorer.js';
 import { TTSService, assetVoiceover } from './services/tts.js';
 import { FontService } from './services/fonts.js';
-import { addMedia, getMedia, listMedia, mediaDataUrl, resolveSceneMedia } from './services/library.js';
+import { addMedia, addVideo, deleteMedia, getMedia, listMedia, mediaDataUrl, resolveSceneMedia } from './services/library.js';
 import { FONTS, PAIRINGS } from './lib/fonts.js';
 import { Notifier } from './services/notify.js';
 import { SUGGESTED_TIMES, WEEKDAY_ONLY, applySchedule, bulkTransition, planSchedule } from './services/scheduling.js';
@@ -186,12 +186,37 @@ export function createApp({ db, ai, config, publisher, worker, tts = new TTSServ
     db.run('UPDATE media SET label = ? WHERE id = ?', String(body.label || '').slice(0, 160), p.id);
     return { id: p.id, label: body.label };
   });
-  on('DELETE', '/api/media/:id', ({ p }) => (db.run('DELETE FROM media WHERE id = ?', p.id), { deleted: true }));
-  on('GET', '/api/media/:id', ({ p, res }) => {
+  on('POST', '/api/workspaces/:id/media/video', ({ p, q, headers, rawBody }) => addVideo(db, must(db.byId('workspaces', p.id), 'Workspace'), { buffer: rawBody, mime: headers['content-type'], name: q.name, label: q.label, dataDir: config.dataDir }), { binary: true, maxBody: 85 * 1024 * 1024 });
+  on('DELETE', '/api/media/:id', ({ p }) => (deleteMedia(db, p.id), { deleted: true }));
+  on('GET', '/api/media/:id/poster', ({ p, res }) => {
     const m = getMedia(db, p.id);
-    if (!m) throw new HttpError(404, 'Image not found');
-    res.writeHead(200, { 'content-type': m.mime, 'cache-control': 'public, max-age=86400' });
-    res.end(m.data);
+    if (!m?.poster || !fs.existsSync(m.poster)) throw new HttpError(404, 'No poster');
+    res.writeHead(200, { 'content-type': 'image/jpeg', 'cache-control': 'public, max-age=86400' });
+    fs.createReadStream(m.poster).pipe(res);
+  }, { raw: true, public: true });
+  on('GET', '/api/media/:id', ({ p, req, res }) => {
+    const m = getMedia(db, p.id);
+    if (!m) throw new HttpError(404, 'Media not found');
+    if (!m.path) {
+      res.writeHead(200, { 'content-type': m.mime, 'cache-control': 'public, max-age=86400' });
+      return res.end(m.data);
+    }
+    if (!fs.existsSync(m.path)) throw new HttpError(404, 'File missing');
+    // Range support so videos can seek.
+    const size = fs.statSync(m.path).size;
+    const range = String(req.headers.range || '').match(/bytes=(\d*)-(\d*)/);
+    if (range) {
+      const start = range[1] ? Number(range[1]) : Math.max(0, size - Number(range[2]));
+      const end = range[1] && range[2] ? Math.min(Number(range[2]), size - 1) : size - 1;
+      if (start >= size || start > end) {
+        res.writeHead(416, { 'content-range': `bytes */${size}` });
+        return res.end();
+      }
+      res.writeHead(206, { 'content-type': m.mime, 'content-length': end - start + 1, 'content-range': `bytes ${start}-${end}/${size}`, 'accept-ranges': 'bytes', 'cache-control': 'public, max-age=86400' });
+      return fs.createReadStream(m.path, { start, end }).pipe(res);
+    }
+    res.writeHead(200, { 'content-type': m.mime, 'content-length': size, 'accept-ranges': 'bytes', 'cache-control': 'public, max-age=86400' });
+    fs.createReadStream(m.path).pipe(res);
   }, { raw: true, public: true });
   on('GET', '/api/workspaces/:id/fonts.css', async ({ p, res }) => {
     const css = await fonts.forWorkspace(must(db.byId('workspaces', p.id), 'Workspace'));

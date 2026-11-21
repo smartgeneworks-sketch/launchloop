@@ -357,3 +357,31 @@ describe('WhatsApp + Telegram channels', () => {
     assert.equal(r.url, 'https://t.me/pb/7');
   });
 });
+
+describe('video clips in the media library', () => {
+  test('MOV upload is converted to H.264 MP4 with duration + poster, and resolves in scenes', async () => {
+    const { execFileSync } = await import('node:child_process');
+    const fs = await import('node:fs');
+    const os = await import('node:os');
+    const path = await import('node:path');
+    try {
+      execFileSync('ffmpeg', ['-version'], { stdio: 'ignore' });
+    } catch {
+      return; // ffmpeg not installed here — covered in the Docker image
+    }
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'llv-'));
+    const mov = path.join(dir, 'c.mov');
+    execFileSync('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc=size=640x360:rate=30:duration=2', '-c:v', 'mpeg4', mov]);
+    const { addVideo, listMedia, resolveSceneMedia } = await import('../src/services/library.js');
+    const { ctx, workspace } = await setup();
+    const v = await addVideo(ctx.db, workspace, { buffer: fs.readFileSync(mov), mime: 'video/quicktime', name: 'c.mov', label: 'blocker radar demo', dataDir: dir });
+    assert.equal(v.mime, 'video/mp4');
+    assert.ok(Math.abs(v.duration - 2) < 0.2);
+    assert.ok(v.posterUrl);
+    const lib = listMedia(ctx.db, workspace);
+    const r = resolveSceneMedia({ type: 'demo', onScreenText: 'Blocker radar', media: { id: v.id, start: 0.5 } }, 0, lib);
+    assert.equal(r.item.kind, 'video');
+    assert.equal(r.start, 0.5);
+    assert.equal(r.zoom, false);
+  });
+});

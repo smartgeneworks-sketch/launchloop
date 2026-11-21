@@ -320,3 +320,9 @@ html[data-theme='nuance'] .brand .logo-on-dark { display: none; }
 .sched-day { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 6px 0; border-top: 1px solid var(--line-2); }
 .sched-day:first-of-type { border-top: 0; }
 .sched-day b { width: 110px; font-size: 12px; }
+
+.media-vid { position: relative; height: 100px; background: #111; border-radius: 6px; overflow: hidden; display: grid; place-items: center; }
+.media-vid img, .media-vid video { width: 100%; height: 100%; object-fit: contain; }
+.vid-badge { position: absolute; left: 6px; bottom: 6px; background: rgba(0,0,0,.72); color: #fff; font-size: 10.5px; font-weight: 700; padding: 2px 7px; border-radius: 999px; }
+.vid-badge.sm { left: 4px; bottom: 4px; padding: 1px 5px; }
+.scene-thumb { position: relative; }

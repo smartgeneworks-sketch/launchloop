@@ -293,9 +293,9 @@ function viewWorkspace() {
         <div><div class="f" style="margin-bottom:6px;font-size:12px;font-weight:600;color:var(--ink-2)">Logo</div><div class="row">${w.brand?.logo ? `<span class="logo-pv"><img src="${esc(w.brand.logo)}" alt="logo"></span><button type="button" class="btn xs ghost" data-action="remove-logo">Remove</button>` : '<span class="muted small">No logo — wordmark is used</span>'}<label class="btn ghost sm">Upload<input type="file" accept="image/png,image/jpeg,image/svg+xml,image/webp" data-upload="logo" hidden></label></div></div>
       </div>
       <h3 style="margin-top:18px">Media library <span class="muted small">— screenshots & pictures for your demos</span></h3>
-      <p class="muted small" style="margin:0 0 8px">Label each image with what it shows (e.g. “upload camera roll photo”, “auto-crop result”, “print sheet 35×45”). Video scenes automatically pick the image whose label matches the scene, and you can choose exactly which image appears in each scene in the video editor.</p>
-      <div class="media-grid">${(S.media || []).map((m) => `<figure class="media-item"><img src="${esc(m.url)}" alt="" loading="lazy"><input type="text" value="${esc(m.label || '')}" placeholder="What does this show?" data-media-label="${esc(m.id)}"><div class="row" style="justify-content:space-between"><span class="muted small">${m.brandKit ? 'brand kit' : esc(Math.round((m.bytes || 0) / 1024) + ' KB')}</span>${m.brandKit ? `<button type="button" class="link small" data-action="remove-shot" data-i="${esc(m.id.split('_').pop())}">remove</button>` : `<button type="button" class="link small" data-action="delete-media" data-id="${esc(m.id)}">delete</button>`}</div></figure>`).join('')}
-        <label class="media-add">+ Upload images<span class="muted small">PNG / JPG · several at once</span><input type="file" accept="image/*" multiple data-upload="media" hidden></label></div>
+      <p class="muted small" style="margin:0 0 8px">Label each image or clip with what it shows (e.g. “upload camera roll photo”, “auto-crop result”, “print sheet 35×45”). Short screen recordings make the most convincing demo scenes. Video scenes automatically pick the image whose label matches the scene, and you can choose exactly which image appears in each scene in the video editor.</p>
+      <div class="media-grid">${(S.media || []).map((m) => `<figure class="media-item">${m.kind === 'video' ? `<div class="media-vid">${m.posterUrl ? `<img src="${esc(m.posterUrl)}" alt="">` : `<video src="${esc(m.url)}#t=0.5" muted preload="metadata"></video>`}<span class="vid-badge">▶ ${m.duration ? m.duration.toFixed(1) + 's' : 'clip'}</span></div>` : `<img src="${esc(m.url)}" alt="" loading="lazy">`}<input type="text" value="${esc(m.label || '')}" placeholder="What does this show?" data-media-label="${esc(m.id)}"><div class="row" style="justify-content:space-between"><span class="muted small">${m.brandKit ? 'brand kit' : esc(Math.round((m.bytes || 0) / 1024) + ' KB')}</span>${m.brandKit ? `<button type="button" class="link small" data-action="remove-shot" data-i="${esc(m.id.split('_').pop())}">remove</button>` : `<button type="button" class="link small" data-action="delete-media" data-id="${esc(m.id)}">delete</button>`}</div></figure>`).join('')}
+        <label class="media-add">+ Upload images or clips<span class="muted small">PNG / JPG · MP4 / MOV screen recordings (keep clips short, under 80 MB)</span><input type="file" accept="image/*,video/mp4,video/quicktime,video/webm" multiple data-upload="media" hidden></label></div>
       <h3 style="margin-top:18px">4 · Audience & locale</h3>
       <div class="form-grid">
         <label class="f">Region / country<select name="region" data-action="region-change">${regionOptions(L.region)}</select></label>
@@ -407,6 +407,47 @@ async function downscaleImage(file, max = 1920) {
   const png = file.type === 'image/png' ? canvas.toDataURL('image/png') : null;
   return png && png.length < 5_500_000 ? png : canvas.toDataURL('image/jpeg', 0.9);
 }
+function uploadVideo(file, label, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    const q = new URLSearchParams({ name: file.name, label: label || file.name.replace(/\.[a-z0-9]+$/i, '').replace(/[-_]+/g, ' ') });
+    xhr.open('POST', `/api/workspaces/${S.wsId}/media/video?${q}`);
+    xhr.setRequestHeader('content-type', file.type || 'video/mp4');
+    const tok = localStorage.getItem('ll_token');
+    if (tok) xhr.setRequestHeader('authorization', `Bearer ${tok}`);
+    xhr.upload.onprogress = (e) => e.lengthComputable && onProgress?.(e.loaded / e.total);
+    xhr.upload.onload = () => onProgress?.('processing');
+    xhr.onload = () => {
+      let data = {};
+      try {
+        data = JSON.parse(xhr.responseText);
+      } catch {}
+      xhr.status < 300 ? resolve(data) : reject(new Error(data.error || `Upload failed (${xhr.status})`));
+    };
+    xhr.onerror = () => reject(new Error('Network error during upload'));
+    xhr.send(file);
+  });
+}
+function progressToast(name) {
+  const el = document.createElement('div');
+  el.className = 'toast';
+  $('#toasts').appendChild(el);
+  return {
+    set: (p) => (el.textContent = p === 'processing' ? `${name}: converting video…` : `${name}: uploading ${Math.round(p * 100)}%`),
+    done: () => el.remove(),
+  };
+}
+async function uploadAny(file, label) {
+  if (file.type.startsWith('video/')) {
+    const t = progressToast(file.name);
+    try {
+      return await uploadVideo(file, label, t.set);
+    } finally {
+      t.done();
+    }
+  }
+  return uploadMedia(file, label);
+}
 async function uploadMedia(file, label) {
   const dataUrl = await downscaleImage(file);
   return api('POST', `/api/workspaces/${S.wsId}/media`, { name: file.name, label: label || file.name.replace(/\.[a-z0-9]+$/i, '').replace(/[-_]+/g, ' '), dataUrl });
@@ -420,7 +461,7 @@ function resolveSceneMedia(scene, index, library) {
   if (choice === 'none') return null;
   if (choice && choice !== 'auto') {
     const item = library.find((m) => m.id === choice);
-    if (item) return { item, fit: scene.media.fit || 'contain', zoom: scene.media.zoom !== false, auto: false };
+    if (item) return { item, fit: scene.media.fit || 'contain', zoom: scene.media.zoom ?? item.kind !== 'video', start: Number(scene.media.start) || 0, auto: false };
   }
   if (!library.length || scene.type === 'cta') return null;
   const sw = wordSet(`${scene.onScreenText} ${scene.vo} ${scene.visual} ${scene.shot}`);
@@ -430,11 +471,14 @@ function resolveSceneMedia(scene, index, library) {
     const sc = [...wordSet(`${m.label} ${m.name}`)].filter((x) => sw.has(x)).length;
     if (sc > bs) (best = m), (bs = sc);
   }
-  return { item: best || library[index % library.length], fit: scene.media?.fit || 'contain', zoom: scene.media?.zoom !== false, auto: true, matched: !!best };
+  const item = best || library[index % library.length];
+  return { item, fit: scene.media?.fit || 'contain', zoom: scene.media?.zoom ?? item.kind !== 'video', start: Number(scene.media?.start) || 0, auto: true, matched: !!best };
 }
-function mediaSelect(attrs, current, { allowAuto = true, defaultLabel = 'Auto (match by label)' } = {}) {
-  return `<select ${attrs}>${allowAuto ? `<option value="auto" ${!current || current === 'auto' ? 'selected' : ''}>${defaultLabel}</option>` : ''}<option value="none" ${current === 'none' ? 'selected' : ''}>No image (brand background)</option>${(S.media || []).map((m) => `<option value="${esc(m.id)}" ${m.id === current ? 'selected' : ''}>${esc(m.label || m.name)}</option>`).join('')}</select>`;
+function mediaSelect(attrs, current, { allowAuto = true, defaultLabel = 'Auto (match by label)', imagesOnly = false } = {}) {
+  const list = (S.media || []).filter((m) => !imagesOnly || m.kind !== 'video');
+  return `<select ${attrs}>${allowAuto ? `<option value="auto" ${!current || current === 'auto' ? 'selected' : ''}>${defaultLabel}</option>` : ''}<option value="none" ${current === 'none' ? 'selected' : ''}>No image (brand background)</option>${list.map((m) => `<option value="${esc(m.id)}" ${m.id === current ? 'selected' : ''}>${m.kind === 'video' ? '🎬 ' : ''}${esc(m.label || m.name)}</option>`).join('')}</select>`;
 }
+const thumbOf = (m, fit = 'contain') => (m ? `<img src="${esc(m.kind === 'video' ? m.posterUrl || '' : m.url)}" alt="" style="object-fit:${fit}">${m.kind === 'video' ? '<span class="vid-badge sm">▶</span>' : ''}` : '<span>brand<br>background</span>');
 
 // ---- regions, languages, currencies (complete lists via Intl; Africa listed first)
 const AFRICA = 'DZ AO BJ BW BF BI CV CM CF TD KM CG CD CI DJ EG GQ ER SZ ET GA GM GH GN GW KE LS LR LY MG MW ML MR MU MA MZ NA NE NG RW ST SN SC SL SO ZA SS SD TZ TG TN UG ZM ZW'.split(' ');
@@ -804,12 +848,13 @@ async function openAsset(assetId, slide = 0) {
       <div class="card" style="padding:10px 14px">${(c.storyboard || []).map((s, i) => {
         const r = resolveSceneMedia(s, i, S.media || []);
         return `<div class="sb-row sb-media-row"><div class="mono">${s.start}–${s.end}s<br><span class="badge b-mute">${esc(s.type)}</span></div><div><input type="text" data-sb="${i}" data-k="onScreenText" value="${esc(s.onScreenText)}" ${locked ? 'disabled' : ''} style="font-weight:600;margin-bottom:4px"><div class="muted small"><b>Shot:</b> ${esc(s.shot)} · <b>Visual:</b> ${esc(s.visual)}</div><textarea data-sb="${i}" data-k="vo" rows="2" ${locked ? 'disabled' : ''} style="min-height:44px;margin-top:4px">${esc(s.vo)}</textarea>
-          <div class="scene-media"><div class="scene-thumb">${r ? `<img src="${esc(r.item.url)}" alt="" style="object-fit:${r.fit === 'cover' ? 'cover' : 'contain'}">` : '<span>brand<br>background</span>'}</div>
+          <div class="scene-media"><div class="scene-thumb">${thumbOf(r?.item, r?.fit === 'cover' ? 'cover' : 'contain')}</div>
             <div class="stack" style="gap:6px;flex:1"><div class="row" style="flex-wrap:nowrap;gap:6px">${mediaSelect(`data-sbm="${i}" data-k="id" ${locked ? 'disabled' : ''}`, s.media?.id)}
               <select data-sbm="${i}" data-k="fit" ${locked ? 'disabled' : ''} style="width:150px"><option value="contain" ${(s.media?.fit || 'contain') === 'contain' ? 'selected' : ''}>Show whole image</option><option value="cover" ${s.media?.fit === 'cover' ? 'selected' : ''}>Fill the frame</option></select></div>
-              <div class="row small" style="gap:12px"><label class="check"><input type="checkbox" data-sbm="${i}" data-k="zoom" ${s.media?.zoom !== false ? 'checked' : ''} ${locked ? 'disabled' : ''}> slow zoom</label>
+              <div class="row small" style="gap:12px"><label class="check"><input type="checkbox" data-sbm="${i}" data-k="zoom" ${r ? (r.zoom ? 'checked' : '') : s.media?.zoom !== false ? 'checked' : ''} ${locked ? 'disabled' : ''}> slow zoom</label>
+              <label class="row clip-start" style="gap:6px;${r?.item.kind === 'video' ? '' : 'display:none'}">start clip at <input type="number" min="0" step="0.5" data-sbm="${i}" data-k="start" value="${esc(s.media?.start ?? 0)}" ${locked ? 'disabled' : ''} style="width:70px;padding:4px 6px"> s${r?.item.duration ? ` <span class="muted">of ${r.item.duration.toFixed(1)}s</span>` : ''}</label>
               ${r?.auto ? `<span class="muted">${r.matched ? 'auto-matched by label' : 'auto (no label matched — pick one)'}</span>` : ''}
-              ${locked ? '' : `<label class="link small" style="cursor:pointer">+ upload for this scene<input type="file" accept="image/*" data-upload="scene-media" data-asset="${a.id}" data-scene="${i}" hidden></label>`}</div></div></div></div></div>`;
+              ${locked ? '' : `<label class="link small" style="cursor:pointer">+ upload image or clip<input type="file" accept="image/*,video/mp4,video/quicktime,video/webm" data-upload="scene-media" data-asset="${a.id}" data-scene="${i}" hidden></label>`}</div></div></div></div></div>`;
       }).join('')}</div>
       <div class="row" style="margin-top:8px"><button type="button" class="btn ghost sm" data-action="render-job" data-id="${a.id}">View render job JSON</button><span class="muted small">Feed to Remotion / FFmpeg / a render API to produce the MP4.</span></div>`;
   } else if (a.format === 'flyer') {
@@ -855,7 +900,7 @@ async function openAsset(assetId, slide = 0) {
 }
 
 function imagePicker(c, locked) {
-  return `<label class="f">Picture${mediaSelect(`name="c_media_id" ${locked ? 'disabled' : ''}`, c.media?.id, { defaultLabel: 'Default (first screenshot)' })}</label>
+  return `<label class="f">Picture${mediaSelect(`name="c_media_id" ${locked ? 'disabled' : ''}`, c.media?.id, { defaultLabel: 'Default (first screenshot)', imagesOnly: true })}</label>
     <label class="f">Picture fit<select name="c_media_fit" ${locked ? 'disabled' : ''}><option value="cover" ${(c.media?.fit || 'cover') === 'cover' ? 'selected' : ''}>Fill the frame</option><option value="contain" ${c.media?.fit === 'contain' ? 'selected' : ''}>Show whole image</option></select></label>`;
 }
 
@@ -1253,7 +1298,7 @@ const forms = {
       f.querySelectorAll('[data-sb]').forEach((i) => (sb[i.dataset.sb][i.dataset.k] = i.value));
       f.querySelectorAll('[data-sbm]').forEach((i) => {
         const sc = sb[i.dataset.sbm];
-        sc.media = { ...(sc.media || {}), [i.dataset.k]: i.type === 'checkbox' ? i.checked : i.value };
+        sc.media = { ...(sc.media || {}), [i.dataset.k]: i.type === 'checkbox' ? i.checked : i.type === 'number' ? Number(i.value) || 0 : i.value };
       });
       content.storyboard = sb;
       content.voiceover = sb.map((s) => s.vo).join(' ');
@@ -1604,7 +1649,26 @@ async function recordVideo(assetId, opts, actx, onProgress) {
   const library = S.media || [];
   const sceneMedia = sb.map((s, i) => resolveSceneMedia(s, i, library));
   const imgCache = {};
-  for (const r of sceneMedia) if (r && !imgCache[r.item.id]) imgCache[r.item.id] = await loadImg(r.item.url);
+  const loadVideo = (url) =>
+    new Promise((res) => {
+      const v = Object.assign(document.createElement('video'), { muted: true, playsInline: true, preload: 'auto', src: url });
+      v.onloadeddata = () => res(v);
+      v.onerror = () => res(null);
+    });
+  for (const r of sceneMedia) if (r && !imgCache[r.item.id]) imgCache[r.item.id] = r.item.kind === 'video' ? await loadVideo(r.item.url) : await loadImg(r.item.url);
+  let playing = { idx: -1, v: null };
+  const dims = (m) => (m instanceof HTMLVideoElement ? [m.videoWidth || 1280, m.videoHeight || 720] : [m.width, m.height]);
+  function syncVideo(idx) {
+    if (playing.idx === idx) return;
+    if (playing.v) playing.v.pause();
+    const r = sceneMedia[idx];
+    const v = r && imgCache[r.item.id] instanceof HTMLVideoElement ? imgCache[r.item.id] : null;
+    playing = { idx, v };
+    if (v) {
+      v.currentTime = Math.min(r.start || 0, Math.max(0, (v.duration || 1) - 0.2));
+      v.play().catch(() => {});
+    }
+  }
   let domain = '';
   try {
     domain = new URL(S.campaign?.base_url || S.ws.website_url).hostname.replace(/^www\./, '');
@@ -1669,6 +1733,11 @@ async function recordVideo(assetId, opts, actx, onProgress) {
     const areaH = subY - y - pad * 0.5;
     const sm = sceneMedia[idx];
     const shot = sm ? imgCache[sm.item.id] : null;
+    syncVideo(idx);
+    if (shot instanceof HTMLVideoElement && shot.duration && shot.currentTime >= shot.duration - 0.06) {
+      shot.currentTime = sm.start || 0; // loop the clip if the scene is longer
+      shot.play().catch(() => {});
+    }
     if (isCta) {
       let cfs = M * 0.052;
       const label = unlink(a.cta).replace(/\s*\(link in bio\)/i, '') + ' →';
@@ -1709,17 +1778,18 @@ async function recordVideo(assetId, opts, actx, onProgress) {
       ctx.clip();
       if (shot) {
         const zoom = sm.zoom ? 1 + 0.08 * p : 1;
-        const cover = Math.max(fw / shot.width, fh / shot.height);
-        const contain = Math.min(fw / shot.width, fh / shot.height);
+        const [sw, sh] = dims(shot);
+        const cover = Math.max(fw / sw, fh / sh);
+        const contain = Math.min(fw / sw, fh / sh);
         if (sm.fit !== 'cover') {
-          // Show the whole screenshot: blurred fill behind, full image in front.
+          // Show the whole screenshot/clip: blurred fill behind, full frame in front.
           ctx.filter = 'blur(18px) brightness(0.6)';
-          ctx.drawImage(shot, fx + (fw - shot.width * cover) / 2, fy + (fh - shot.height * cover) / 2, shot.width * cover, shot.height * cover);
+          ctx.drawImage(shot, fx + (fw - sw * cover) / 2, fy + (fh - sh * cover) / 2, sw * cover, sh * cover);
           ctx.filter = 'none';
         }
         const scale = (sm.fit === 'cover' ? cover : contain) * zoom;
-        const iw = shot.width * scale;
-        const ih = shot.height * scale;
+        const iw = sw * scale;
+        const ih = sh * scale;
         if (s.type === 'hook' && sm.auto) ctx.filter = 'blur(6px) brightness(0.55)';
         if (s.type === 'problem' && sm.auto) ctx.filter = 'grayscale(0.85) brightness(0.8)';
         ctx.drawImage(shot, fx + (fw - iw) / 2, sm.fit === 'cover' ? fy + (fh - ih) * 0.2 : fy + (fh - ih) / 2, iw, ih);
@@ -1796,6 +1866,7 @@ async function recordVideo(assetId, opts, actx, onProgress) {
     tick();
   });
   rec.stop();
+  if (playing.v) playing.v.pause();
   await stopped;
   stream.getTracks().forEach((tr) => tr.stop());
   let blob = new Blob(chunks, { type: mime.split(';')[0] });
@@ -1872,7 +1943,7 @@ document.addEventListener('change', async (e) => {
     const files = [...el.files];
     if (!files.length) return;
     toast(`Uploading ${files.length} image(s)…`);
-    for (const file of files) await uploadMedia(file).catch((err) => toast(`${file.name}: ${err.message}`, 'bad'));
+    for (const file of files) await uploadAny(file).catch((err) => toast(`${file.name}: ${err.message}`, 'bad'));
     S.media = await api('GET', `/api/workspaces/${S.wsId}/media`);
     toast('Uploaded — add a label to each so scenes can match them', 'ok');
     return render();
@@ -1883,13 +1954,17 @@ document.addEventListener('change', async (e) => {
     const row = el.closest('.sb-row');
     const label = row?.querySelector('[data-k=onScreenText]')?.value || '';
     try {
-      const m = await uploadMedia(file, label);
+      const m = await uploadAny(file, label);
       S.media = await api('GET', `/api/workspaces/${S.wsId}/media`);
+      const full = S.media.find((x) => x.id === m.id) || m;
       const sel = row.querySelector('select[data-k=id]');
-      sel.insertAdjacentHTML('beforeend', `<option value="${esc(m.id)}">${esc(m.label || m.name)}</option>`);
+      sel.insertAdjacentHTML('beforeend', `<option value="${esc(m.id)}">${full.kind === 'video' ? '🎬 ' : ''}${esc(m.label || m.name)}</option>`);
       sel.value = m.id;
-      row.querySelector('.scene-thumb').innerHTML = `<img src="${esc(m.url)}" alt="" style="object-fit:contain">`;
-      toast('Image added to this scene — click Save changes', 'ok');
+      row.querySelector('.scene-thumb').innerHTML = thumbOf(full);
+      const cs = row.querySelector('.clip-start');
+      if (cs) cs.style.display = full.kind === 'video' ? '' : 'none';
+      if (full.kind === 'video') row.querySelector('[data-k=zoom]').checked = false;
+      toast(`${full.kind === 'video' ? 'Clip' : 'Image'} added to this scene — click Save changes`, 'ok');
     } catch (err) {
       toast(err.message, 'bad');
     }
@@ -1897,7 +1972,11 @@ document.addEventListener('change', async (e) => {
   }
   if (el.dataset.sbm !== undefined && el.dataset.k === 'id') {
     const m = (S.media || []).find((x) => x.id === el.value);
-    el.closest('.sb-row').querySelector('.scene-thumb').innerHTML = m ? `<img src="${esc(m.url)}" alt="" style="object-fit:contain">` : el.value === 'none' ? '<span>brand<br>background</span>' : '<span>auto</span>';
+    const row = el.closest('.sb-row');
+    row.querySelector('.scene-thumb').innerHTML = m ? thumbOf(m) : el.value === 'none' ? '<span>brand<br>background</span>' : '<span>auto</span>';
+    const cs = row.querySelector('.clip-start');
+    if (cs) cs.style.display = m?.kind === 'video' ? '' : 'none';
+    if (m?.kind === 'video') row.querySelector('[data-k=zoom]').checked = false;
     return;
   }
   if (el.dataset.upload) {

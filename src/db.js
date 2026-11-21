@@ -207,6 +207,14 @@ export function openDb(file) {
   if (file !== ':memory:') raw.exec('PRAGMA journal_mode = WAL;');
   raw.exec('PRAGMA foreign_keys = ON;');
   raw.exec(SCHEMA);
+  // Additive migrations for databases created by earlier versions.
+  for (const sql of ['ALTER TABLE media ADD COLUMN path TEXT', 'ALTER TABLE media ADD COLUMN kind TEXT', 'ALTER TABLE media ADD COLUMN duration REAL', 'ALTER TABLE media ADD COLUMN poster TEXT']) {
+    try {
+      raw.exec(sql);
+    } catch {
+      /* column already exists */
+    }
+  }
   return wrap(raw);
 }
 
