@@ -13,6 +13,7 @@ import { seed } from '../src/seed.js';
 import { createWorker } from '../src/worker.js';
 import { start } from '../src/server.js';
 import { Notifier } from '../src/services/notify.js';
+import { planSchedule, applySchedule, bulkTransition, zonedToUtc } from '../src/services/scheduling.js';
 
 const mkCtx = () => {
   const config = makeConfig({ PUBLISH_MODE: 'mock', SIMULATE_METRICS: 'false' });
@@ -268,5 +269,59 @@ describe('reminders (email + WhatsApp)', () => {
     assert.throws(() => n.saveSettings(workspace, { whatsapp: '0241234' }), /country code/);
     assert.throws(() => n.saveSettings(workspace, { email: 'not-an-email' }), /valid email/);
     assert.equal(n.saveSettings(workspace, { whatsapp: '233241234567' }).whatsapp, '+233241234567');
+  });
+});
+
+describe('bulk scheduling', () => {
+  test('time-zone conversion', () => {
+    assert.equal(zonedToUtc('2026-11-24', '19:00', 'Africa/Accra'), '2026-11-24T19:00:00.000Z');
+    assert.equal(zonedToUtc('2026-11-24', '19:00', 'Africa/Lagos'), '2026-11-24T18:00:00.000Z');
+    assert.equal(zonedToUtc('2026-07-01', '08:00', 'Europe/London'), '2026-07-01T07:00:00.000Z');
+  });
+
+  test('plan spreads posts one per channel per day, skips weekends for LinkedIn and busy days', async () => {
+    const { ctx, campaign } = await setup();
+    const { db } = ctx;
+    // approve every draft / review item so there is plenty to schedule
+    for (const a of db.all('creative_assets', `SELECT * FROM creative_assets WHERE campaign_id = ? AND state IN ('DRAFT','NEEDS_REVIEW')`, campaign.id)) {
+      if (a.state === 'DRAFT') core.transitionAsset(ctx, a.id, 'NEEDS_REVIEW');
+      core.transitionAsset(ctx, a.id, 'APPROVED');
+    }
+    const start = '2030-03-04'; // a Monday, far in the future
+    const r = planSchedule(db, campaign.id, { startDate: start, endDate: '2030-03-31', timezone: 'Africa/Accra', now: new Date('2030-03-01T00:00:00Z') });
+    assert.ok(r.plan.length > 0);
+    assert.equal(r.unscheduled.length, 0);
+    const perDay = {};
+    for (const p of r.plan) {
+      const k = `${p.channel}|${p.localDate}`;
+      perDay[k] = (perDay[k] || 0) + 1;
+      assert.equal(perDay[k], 1, `two ${p.channel} posts on ${p.localDate}`);
+      if (p.channel === 'linkedin') assert.ok(![0, 6].includes(new Date(p.localDate + 'T12:00:00Z').getUTCDay()), 'LinkedIn on a weekend');
+      assert.equal(p.runAt, zonedToUtc(p.localDate, p.localTime, 'Africa/Accra'));
+    }
+  });
+
+  test('apply schedules the plan; reschedule keeps the approval and moves the job', async () => {
+    const { ctx, campaign } = await setup();
+    const { db } = ctx;
+    const res = applySchedule(ctx, campaign.id, { startDate: '2030-03-04', endDate: '2030-03-20', timezone: 'Africa/Accra', now: new Date('2030-03-01T00:00:00Z') });
+    assert.ok(res.scheduled.length >= 2 && res.errors.length === 0);
+    const a = db.byId('creative_assets', res.scheduled[0].assetId);
+    assert.equal(a.state, 'SCHEDULED');
+    const moved = core.scheduleAsset(ctx, a.id, { runAt: '2030-03-25T10:00:00.000Z' });
+    assert.equal(moved.state, 'SCHEDULED');
+    assert.equal(moved.scheduled_at, '2030-03-25T10:00:00.000Z');
+    const jobs = db.all('schedule_jobs', 'SELECT * FROM schedule_jobs WHERE asset_id = ? ORDER BY created_at', a.id);
+    assert.equal(jobs.filter((j) => j.status === 'pending').length, 1);
+    assert.equal(jobs.find((j) => j.status === 'pending').run_at, '2030-03-25T10:00:00.000Z');
+  });
+
+  test('bulk approve only touches the selected items in this campaign', async () => {
+    const { ctx, campaign } = await setup();
+    const review = ctx.db.all('creative_assets', `SELECT * FROM creative_assets WHERE campaign_id = ? AND state = 'NEEDS_REVIEW'`, campaign.id);
+    const r = bulkTransition(ctx, campaign.id, { assetIds: [review[0].id, review[1].id, 'ast_000000000000'], to: 'APPROVED' });
+    assert.equal(r.ok.length, 2);
+    assert.equal(r.errors.length, 1);
+    assert.equal(ctx.db.byId('creative_assets', review[2].id).state, 'NEEDS_REVIEW');
   });
 });

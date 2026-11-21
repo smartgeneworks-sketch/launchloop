@@ -328,13 +328,18 @@ export function scheduleAsset({ db }, assetId, { runAt, autoPublish } = {}) {
   const asset = must(db.byId('creative_assets', assetId), 'Asset');
   const when = new Date(runAt || Date.now());
   if (Number.isNaN(when.getTime())) throw new HttpError(400, 'Invalid publish time');
-  if (!['APPROVED', 'FAILED'].includes(asset.state)) throw new HttpError(409, `Only APPROVED items can be scheduled (this one is ${asset.state})`);
+  if (!['APPROVED', 'FAILED', 'SCHEDULED'].includes(asset.state)) throw new HttpError(409, `Only APPROVED items can be scheduled (this one is ${asset.state})`);
   const campaign = db.byId('campaigns', asset.campaign_id);
   const conn = connectionFor(db, campaign.workspace_id, asset.channel);
   return db.tx(() => {
     cancelJobs(db, asset.id, 'Rescheduled');
     const auto = autoPublish === undefined ? asset.auto_publish : !!autoPublish;
-    const updated = transition(db, asset, 'SCHEDULED', { actor: 'user', note: `For ${when.toISOString()}`, patch: { scheduled_at: when.toISOString(), auto_publish: auto, error: null } });
+    let updated;
+    if (asset.state === 'SCHEDULED') {
+      // Reschedule: content and approval are unchanged, only the time moves.
+      updated = db.update('creative_assets', asset.id, { scheduled_at: when.toISOString(), auto_publish: auto });
+      db.insert('asset_events', { id: id('evt'), asset_id: asset.id, from_state: 'SCHEDULED', to_state: 'SCHEDULED', actor: 'user', note: `Rescheduled to ${when.toISOString()}`, at: nowIso() });
+    } else updated = transition(db, asset, 'SCHEDULED', { actor: 'user', note: `For ${when.toISOString()}`, patch: { scheduled_at: when.toISOString(), auto_publish: auto, error: null } });
     const willAuto = auto && conn?.mode === 'api' && conn.auto_publish && conn.status !== 'disconnected';
     db.insert('schedule_jobs', {
       id: id('job'),

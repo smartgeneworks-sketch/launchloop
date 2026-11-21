@@ -21,6 +21,7 @@ import { FontService } from './services/fonts.js';
 import { addMedia, getMedia, listMedia, mediaDataUrl, resolveSceneMedia } from './services/library.js';
 import { FONTS, PAIRINGS } from './lib/fonts.js';
 import { Notifier } from './services/notify.js';
+import { SUGGESTED_TIMES, WEEKDAY_ONLY, applySchedule, bulkTransition, planSchedule } from './services/scheduling.js';
 import { STATES, allowedNext } from './services/stateMachine.js';
 import { buildUtmUrl } from './services/utm.js';
 import { createWorker } from './worker.js';
@@ -197,6 +198,14 @@ export function createApp({ db, ai, config, publisher, worker, tts = new TTSServ
     res.writeHead(200, { 'content-type': 'text/css; charset=utf-8', 'cache-control': 'no-cache' });
     res.end(css);
   }, { raw: true, public: true });
+
+  // ---------------------------------------------------------------- bulk scheduling
+  on('GET', '/api/scheduling/defaults', () => ({ times: SUGGESTED_TIMES, weekdayOnly: WEEKDAY_ONLY }));
+  on('POST', '/api/campaigns/:id/auto-schedule', ({ p, body }) => {
+    must(db.byId('campaigns', p.id), 'Campaign');
+    return body.dryRun ? planSchedule(db, p.id, body) : applySchedule(ctx, p.id, body);
+  });
+  on('POST', '/api/campaigns/:id/bulk-transition', ({ p, body }) => (must(db.byId('campaigns', p.id), 'Campaign'), bulkTransition(ctx, p.id, body)));
 
   // ---------------------------------------------------------------- reminders (email + WhatsApp)
   on('GET', '/api/workspaces/:id/notifications', ({ p }) => {

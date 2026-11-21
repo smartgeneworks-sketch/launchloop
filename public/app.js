@@ -180,7 +180,7 @@ function renderSelectors() {
 
 // ------------------------------------------------------------------ router
 const route = () => (location.hash.replace(/^#\/?/, '').split('?')[0] || 'dashboard');
-const VIEWS = { dashboard: viewDashboard, workspace: viewWorkspace, studio: viewStudio, review: viewReview, timeline: viewTimeline, analytics: viewAnalytics };
+const VIEWS = { dashboard: viewDashboard, workspace: viewWorkspace, studio: viewStudio, review: viewReview, calendar: viewCalendar, timeline: viewTimeline, analytics: viewAnalytics };
 function render() {
   const r = VIEWS[route()] ? route() : 'dashboard';
   document.querySelectorAll('#nav a').forEach((a) => a.classList.toggle('active', a.dataset.route === r));
@@ -562,7 +562,8 @@ function assetCard(a) {
 // ------------------------------------------------------------------ review queue
 function viewReview() {
   const by = (s) => S.assets.filter((a) => a.state === s);
-  const lane = (title, sub, items, renderer) => `<div class="lane"><div class="lane-head"><h2>${title}</h2><span class="badge b-mute">${items.length}</span><span class="muted small">${sub}</span></div>${items.length ? items.map(renderer).join('') : '<div class="muted small" style="padding:4px 0 10px">Nothing here.</div>'}</div>`;
+  const lane = (title, sub, items, renderer, extra = '') => `<div class="lane"><div class="lane-head"><h2>${title}</h2><span class="badge b-mute">${items.length}</span><span class="muted small">${sub}</span><span style="margin-left:auto" class="row">${items.length ? extra : ''}</span></div>${items.length ? items.map(renderer).join('') : '<div class="muted small" style="padding:4px 0 10px">Nothing here.</div>'}</div>`;
+  const pick = (a, group) => `<label class="pick" title="Select"><input type="checkbox" data-pick="${group}" value="${a.id}"></label>`;
   const nextHour = new Date(Math.ceil(Date.now() / 3600000) * 3600000);
   const mini = (a) => `<div class="mini" data-action="open-asset" data-id="${a.id}"><img src="${mediaUrl(a)}" alt=""></div>`;
   const head = (a) => `<div class="row" style="gap:8px"><b>${esc(a.title)}</b>${badge(a.state)}${scorePill(a.score)}</div><div class="cap" style="margin-top:4px">${esc(a.caption)}</div>`;
@@ -574,12 +575,12 @@ function viewReview() {
       const c = conn(k);
       return `<label class="row small"><span class="toggle"><input type="checkbox" data-action="channel-auto" data-id="${c?.id}" ${c?.auto_publish ? 'checked' : ''} ${c?.mode !== 'api' ? 'disabled' : ''}><span></span></span><b>${esc(ch(k).label)}</b>${c?.mode !== 'api' ? '<span class="badge b-kit">Share Kit</span>' : ''}</label>`;
     }).join('')}</div></div>
-  ${lane('Needs review', 'approve or request changes', by('NEEDS_REVIEW'), (a) => `<div class="rev">${mini(a)}<div>${head(a)}</div><div class="ctrl"><div class="row"><button class="btn ok sm" data-action="transition" data-to="APPROVED" data-id="${a.id}">Approve</button><button class="btn ghost sm" data-action="request-changes" data-id="${a.id}">Request changes</button></div><button class="link small" data-action="open-asset" data-id="${a.id}">Open editor</button></div></div>`)}
+  ${lane('Needs review', 'approve or request changes', by('NEEDS_REVIEW'), (a) => `<div class="rev has-pick">${pick(a, 'review')}${mini(a)}<div>${head(a)}</div><div class="ctrl"><div class="row"><button class="btn ok sm" data-action="transition" data-to="APPROVED" data-id="${a.id}">Approve</button><button class="btn ghost sm" data-action="request-changes" data-id="${a.id}">Request changes</button></div><button class="link small" data-action="open-asset" data-id="${a.id}">Open editor</button></div></div>`, `<label class="check small"><input type="checkbox" data-pick-all="review"> select all</label><button class="btn ok sm" data-action="bulk-approve">Approve selected</button>`)}
   ${lane('Approved — set a publish time', 'scheduling queues a job for the worker', by('APPROVED'), (a) => {
     const c = conn(a.channel);
     const auto = c?.mode === 'api';
-    return `<div class="rev">${mini(a)}<div>${head(a)}</div><div class="ctrl"><input type="datetime-local" id="when-${a.id}" value="${toLocalInput(nextHour)}" style="width:210px"><label class="row small"><span class="toggle"><input type="checkbox" id="auto-${a.id}" ${a.auto_publish && auto ? 'checked' : ''} ${auto ? '' : 'disabled'}><span></span></span>${auto ? 'auto-publish via API' : 'Share Kit — manual post'}</label><div class="row"><button class="btn sm" data-action="schedule" data-id="${a.id}">Schedule</button><button class="btn ghost sm" data-action="schedule-now" data-id="${a.id}">Publish now</button></div></div></div>`;
-  })}
+    return `<div class="rev has-pick">${pick(a, 'approved')}${mini(a)}<div>${head(a)}</div><div class="ctrl"><input type="datetime-local" id="when-${a.id}" value="${toLocalInput(nextHour)}" style="width:210px"><label class="row small"><span class="toggle"><input type="checkbox" id="auto-${a.id}" ${a.auto_publish && auto ? 'checked' : ''} ${auto ? '' : 'disabled'}><span></span></span>${auto ? 'auto-publish via API' : 'Share Kit — manual post'}</label><div class="row"><button class="btn sm" data-action="schedule" data-id="${a.id}">Schedule</button><button class="btn ghost sm" data-action="schedule-now" data-id="${a.id}">Publish now</button></div></div></div>`;
+  }, `<button class="btn signal sm" data-action="auto-schedule">⚡ Auto-schedule all…</button>`)}
   ${lane('Scheduled', 'the scheduler transitions these when due', by('SCHEDULED'), (a) => {
     const c = conn(a.channel);
     const willAuto = a.auto_publish && c?.mode === 'api' && c?.auto_publish;
@@ -590,6 +591,103 @@ function viewReview() {
   ${lane('Failed', 'retry or fix and re-approve', by('FAILED'), (a) => `<div class="rev">${mini(a)}<div>${head(a)}<div class="err" style="margin-top:6px">${esc(a.error || 'Unknown error')}</div></div><div class="ctrl"><button class="btn sm" data-action="retry" data-id="${a.id}">Retry now</button><button class="btn ghost sm" data-action="share-kit" data-id="${a.id}">Share Kit instead</button><button class="link small" data-action="open-asset" data-id="${a.id}">Edit</button></div></div>`)}
   ${lane('Needs revision', 'edit or regenerate, then resubmit', by('NEEDS_REVISION'), (a) => `<div class="rev">${mini(a)}<div>${head(a)}${a.review_note ? `<div class="note" style="margin-top:6px">✎ ${esc(a.review_note)}</div>` : ''}</div><div class="ctrl"><button class="btn sm" data-action="open-asset" data-id="${a.id}">Edit</button><button class="btn ghost sm" data-action="transition" data-to="NEEDS_REVIEW" data-id="${a.id}">Resubmit</button></div></div>`)}
   ${lane('Published', 'live — see Analytics for performance', by('PUBLISHED'), (a) => `<div class="rev">${mini(a)}<div>${head(a)}<div class="row small" style="margin-top:6px"><span class="mono">${fmtDate(a.published_at, { time: true })}</span>${a.external_url ? `<a class="link" href="${esc(a.external_url)}" target="_blank" rel="noopener">view post ↗</a>` : ''}</div></div><div class="ctrl"><button class="btn ghost sm" data-action="iterate" data-id="${a.id}">Generate variation</button></div></div>`)}`;
+}
+
+// ------------------------------------------------------------------ calendar
+const wsTz = () => S.notif?.settings?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+const tzDate = (iso, tz = wsTz()) => new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(iso));
+const tzTime = (iso, tz = wsTz()) => new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(iso));
+function zonedToUtcClient(date, time, tz = wsTz()) {
+  const [y, m, d] = date.split('-').map(Number);
+  const [hh, mm] = time.split(':').map(Number);
+  const guess = Date.UTC(y, m - 1, d, hh, mm);
+  const off = (ms) => {
+    const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: tz, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' }).formatToParts(new Date(ms)).map((x) => [x.type, x.value]));
+    return Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour % 24, +p.minute, +p.second) - ms;
+  };
+  let utc = guess - off(guess);
+  utc = guess - off(utc);
+  return new Date(utc).toISOString();
+}
+const CH_COLOR = { instagram: '#c13584', tiktok: '#111111', youtube_shorts: '#d93025', linkedin: '#0a66c2', x: '#3d3d3d', facebook: '#1877f2', threads: '#5b5b5b', reddit: '#ff4500', product_hunt: '#da552f' };
+const addDays = (date, n) => new Date(Date.parse(date + 'T12:00:00Z') + n * 86400000).toISOString().slice(0, 10);
+
+function viewCalendar() {
+  const tz = wsTz();
+  const today = tzDate(new Date().toISOString(), tz);
+  const month = S.ui.calMonth || today.slice(0, 7);
+  const first = `${month}-01`;
+  const startOffset = (new Date(first + 'T12:00:00Z').getUTCDay() + 6) % 7; // Monday-first
+  const gridStart = addDays(first, -startOffset);
+  const days = Array.from({ length: 42 }, (_, i) => addDays(gridStart, i));
+  const items = {};
+  for (const a of S.assets) {
+    const at = a.state === 'SCHEDULED' ? a.scheduled_at : a.state === 'PUBLISHED' ? a.published_at : a.state === 'FAILED' ? a.scheduled_at : null;
+    if (!at) continue;
+    (items[tzDate(at, tz)] ||= []).push({ a, at });
+  }
+  Object.values(items).forEach((l) => l.sort((x, y) => x.at.localeCompare(y.at)));
+  const ready = S.assets.filter((a) => a.state === 'APPROVED');
+  const label = new Date(first + 'T12:00:00Z').toLocaleString(locale(), { month: 'long', year: 'numeric', timeZone: 'UTC' });
+  const launch = S.campaign.launch_date;
+  const monthCount = S.assets.filter((a) => (a.scheduled_at || a.published_at) && tzDate(a.published_at || a.scheduled_at, tz).startsWith(month)).length;
+  return `
+  <div class="spread"><div><h1 class="page">Calendar</h1><p class="page-sub">Drag posts to another day to reschedule, or drag an approved creative onto a day to schedule it. Times shown in <b>${esc(tz.replace(/_/g, ' '))}</b>.</p></div>
+    <div class="row"><button class="btn signal" data-action="auto-schedule" ${ready.length ? '' : 'disabled'}>⚡ Auto-schedule ${ready.length} approved…</button></div></div>
+  <div class="cal-wrap">
+    <div class="card cal">
+      <div class="spread" style="margin-bottom:10px"><div class="row"><button class="btn ghost sm" data-action="cal-nav" data-v="-1">‹</button><h2 style="min-width:170px;text-align:center">${esc(label)}</h2><button class="btn ghost sm" data-action="cal-nav" data-v="1">›</button><button class="btn ghost sm" data-action="cal-nav" data-v="0">Today</button></div>
+        <span class="muted small">${monthCount} post(s) this month</span></div>
+      <div class="cal-grid">${['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((d) => `<div class="cal-dow">${d}</div>`).join('')}
+      ${days
+        .map((d) => {
+          const list = items[d] || [];
+          const cls = [d.slice(0, 7) !== month ? 'other' : '', d === today ? 'today' : '', d < today ? 'past' : '', d === launch ? 'launch' : ''].join(' ');
+          return `<div class="cal-day ${cls}" data-drop-day="${d}"><div class="cal-num">${Number(d.slice(8))}${d === launch ? ' <span class="cal-launch">🚀 launch</span>' : ''}</div>
+            ${list.map(({ a, at }) => `<div class="cal-chip s-${a.state}" ${a.state === 'SCHEDULED' ? `draggable="true" data-drag-asset="${a.id}"` : ''} data-action="open-asset" data-id="${a.id}" title="${esc(a.title)} — ${STATE_LABEL[a.state]}"><span class="cal-dot" style="background:${CH_COLOR[a.channel] || '#888'}"></span>${tzTime(at, tz)} ${esc(ch(a.channel).label)} · ${esc(fmtLabel(a.format))}${a.state === 'PUBLISHED' ? ' ✓' : a.state === 'FAILED' ? ' ⚠' : ''}</div>`).join('')}</div>`;
+        })
+        .join('')}</div>
+    </div>
+    <div class="card cal-side"><h2>Ready to schedule</h2><p class="muted small">Approved creatives. Drag one onto a day — it's scheduled at that channel's suggested time.</p>
+      ${ready.length ? ready.map((a) => `<div class="cal-ready" draggable="true" data-drag-ready="${a.id}"><img src="${mediaUrl(a)}" alt=""><div><div class="small" style="font-weight:600">${esc(a.title)}</div><div class="muted small">${esc(ch(a.channel).label)} · ${esc(fmtLabel(a.format))} · score ${a.score?.overall ?? '–'}</div></div></div>`).join('') : '<div class="muted small">Nothing approved yet — approve creatives in the Approval queue.</div>'}
+      <div class="cal-legend">${Object.entries(CH_COLOR).filter(([k]) => S.campaign.channels.includes(k)).map(([k, c]) => `<span><i style="background:${c}"></i>${esc(ch(k).label)}</span>`).join('')}</div>
+    </div>
+  </div>`;
+}
+
+async function openAutoSchedule() {
+  const ready = S.assets.filter((a) => a.state === 'APPROVED');
+  if (!ready.length) return toast('No approved creatives to schedule', 'bad');
+  const defs = S._schedDefaults || (S._schedDefaults = await api('GET', '/api/scheduling/defaults'));
+  const tz = wsTz();
+  const today = tzDate(new Date().toISOString(), tz);
+  const launch = S.campaign.launch_date;
+  const end = launch > today ? addDays(launch, 7) : addDays(today, 13);
+  const channels = [...new Set(ready.map((a) => a.channel))];
+  const pre = new Set(Array.from(document.querySelectorAll('[data-pick="approved"]:checked')).map((i) => i.value));
+  openModal(`${modalHead('Auto-schedule approved creatives')}
+  <form class="modal-body stack" id="autoSched" onsubmit="return false">
+    <div class="muted small">Spreads posts evenly across the date range — by default at most 2 posts a day and 1 per channel, strongest creatives first — at suggested times in <b>${esc(tz.replace(/_/g, ' '))}</b> (change the time zone in Product source → Reminders). Days that already have a post on that channel are skipped.</div>
+    <div class="form-grid">
+      <label class="f">Start date<input type="date" name="startDate" value="${today}"></label>
+      <label class="f">End date<input type="date" name="endDate" value="${end}"></label>
+      <label class="f">Posts per day (all channels)<select name="maxPerDay">${[1, 2, 3, 4, 6].map((n) => `<option value="${n}" ${n === 2 ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
+      <label class="f">Posts per channel per day<select name="perChannelPerDay"><option value="1">1</option><option value="2">2</option><option value="3">3</option></select></label>
+      <label class="check small" style="align-self:end"><input type="checkbox" name="liWeekdays" checked> LinkedIn on weekdays only</label>
+    </div>
+    <div><div class="eyebrow" style="margin-bottom:6px">Posting time per channel (local)</div><div class="time-grid">${channels.map((c) => `<label class="f">${esc(ch(c).label)}<input type="time" name="t_${c}" value="${esc(defs.times[c] || '12:00')}"></label>`).join('')}</div></div>
+    <div><div class="spread"><div class="eyebrow">Creatives (${ready.length})</div><label class="check small"><input type="checkbox" data-pick-all="sched" checked> all</label></div>
+      <div class="sched-list">${ready.map((a) => `<label class="check small"><input type="checkbox" data-pick="sched" value="${a.id}" ${!pre.size || pre.has(a.id) ? 'checked' : ''}> ${esc(ch(a.channel).label)} · ${esc(fmtLabel(a.format))} — ${esc(a.title)} <span class="muted">(score ${a.score?.overall ?? '–'})</span></label>`).join('')}</div></div>
+    <div id="schedPreview"></div>
+    <div class="row"><button type="button" class="btn ghost" data-action="sched-preview">Preview plan</button><button type="button" class="btn signal" data-action="sched-apply" disabled>Schedule</button><button type="button" class="btn ghost" data-action="close">Cancel</button></div>
+  </form>`);
+}
+function schedBody(dryRun) {
+  const f = $('#autoSched');
+  const fd = new FormData(f);
+  const times = {};
+  f.querySelectorAll('input[name^="t_"]').forEach((i) => (times[i.name.slice(2)] = i.value));
+  return { dryRun, assetIds: [...f.querySelectorAll('[data-pick="sched"]:checked')].map((i) => i.value), startDate: fd.get('startDate'), endDate: fd.get('endDate'), perChannelPerDay: Number(fd.get('perChannelPerDay')), maxPerDay: Number(fd.get('maxPerDay')), weekdayOnly: fd.get('liWeekdays') ? ['linkedin'] : [], times, timezone: wsTz() };
 }
 
 // ------------------------------------------------------------------ timeline & tasks
@@ -898,6 +996,48 @@ const actions = {
     localStorage.setItem('ll_theme', el.dataset.v);
     history.replaceState(null, '', location.pathname + location.hash);
     location.reload();
+  },
+  'auto-schedule'() {
+    openAutoSchedule().catch((e) => toast(e.message, 'bad'));
+  },
+  async 'sched-preview'(el) {
+    const body = schedBody(true);
+    if (!body.assetIds.length) return toast('Select at least one creative', 'bad');
+    const r = await busy(el, () => api('POST', `/api/campaigns/${S.cmpId}/auto-schedule`, body));
+    const byDay = {};
+    r.plan.forEach((p) => (byDay[p.localDate] ||= []).push(p));
+    $('#schedPreview').innerHTML = `<div class="card" style="padding:12px 14px"><div class="eyebrow" style="margin-bottom:6px">Plan: ${r.plan.length} post(s)${r.unscheduled.length ? ` · <span style="color:var(--bad)">${r.unscheduled.length} didn't fit — extend the end date or allow more per day</span>` : ''}</div>
+      ${Object.entries(byDay).map(([d, l]) => `<div class="sched-day"><b>${esc(fmtDate(d))}</b>${l.map((p) => `<span class="cal-chip s-APPROVED"><span class="cal-dot" style="background:${CH_COLOR[p.channel] || '#888'}"></span>${p.localTime} ${esc(p.channelLabel)} · ${esc(fmtLabel(p.format))}</span>`).join('')}</div>`).join('') || '<div class="muted small">Nothing fits in this range.</div>'}</div>`;
+    const btn = $('[data-action=sched-apply]');
+    btn.disabled = !r.plan.length;
+    btn.textContent = `Schedule ${r.plan.length} post(s)`;
+  },
+  async 'sched-apply'(el) {
+    const r = await busy(el, () => api('POST', `/api/campaigns/${S.cmpId}/auto-schedule`, schedBody(false)));
+    closeModal();
+    toast(`Scheduled ${r.scheduled.length} post(s)${r.unscheduled.length ? ` · ${r.unscheduled.length} left unscheduled` : ''}${r.errors.length ? ` · ${r.errors.length} error(s)` : ''}`, r.errors.length ? 'bad' : 'ok');
+    await refreshCampaign();
+    location.hash = '#/calendar';
+    render();
+  },
+  async 'bulk-approve'(el) {
+    const ids = [...document.querySelectorAll('[data-pick="review"]:checked')].map((i) => i.value);
+    if (!ids.length) return toast('Tick the creatives you want to approve', 'bad');
+    const r = await busy(el, () => api('POST', `/api/campaigns/${S.cmpId}/bulk-transition`, { assetIds: ids, to: 'APPROVED' }));
+    toast(`Approved ${r.ok.length}${r.errors.length ? ` · ${r.errors.length} failed` : ''}`, r.errors.length ? 'bad' : 'ok');
+    await refreshCampaign();
+    render();
+  },
+  'cal-nav'(el) {
+    const tzToday = tzDate(new Date().toISOString());
+    const cur = S.ui.calMonth || tzToday.slice(0, 7);
+    if (el.dataset.v === '0') S.ui.calMonth = tzToday.slice(0, 7);
+    else {
+      const [y, m] = cur.split('-').map(Number);
+      const d = new Date(Date.UTC(y, m - 1 + Number(el.dataset.v), 1));
+      S.ui.calMonth = d.toISOString().slice(0, 7);
+    }
+    render();
   },
   async 'test-reminder'(el) {
     const f = $('form[data-form=notifications]');
@@ -1802,6 +1942,57 @@ document.addEventListener('input', (e) => {
   }
 });
 document.addEventListener('keydown', (e) => e.key === 'Escape' && closeModal());
+
+// select-all checkboxes
+document.addEventListener('change', (e) => {
+  const g = e.target.dataset?.pickAll;
+  if (g) document.querySelectorAll(`[data-pick="${g}"]`).forEach((i) => (i.checked = e.target.checked));
+});
+
+// calendar drag & drop
+let dragData = null;
+document.addEventListener('dragstart', (e) => {
+  const chip = e.target.closest?.('[data-drag-asset],[data-drag-ready]');
+  if (!chip) return;
+  dragData = chip.dataset.dragAsset ? { kind: 'move', id: chip.dataset.dragAsset } : { kind: 'new', id: chip.dataset.dragReady };
+  e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.setData('text/plain', dragData.id);
+});
+document.addEventListener('dragover', (e) => {
+  const day = e.target.closest?.('[data-drop-day]');
+  if (!day || !dragData) return;
+  e.preventDefault();
+  document.querySelectorAll('.cal-day.over').forEach((d) => d !== day && d.classList.remove('over'));
+  day.classList.add('over');
+});
+document.addEventListener('dragleave', (e) => e.target.closest?.('[data-drop-day]')?.classList.remove('over'));
+document.addEventListener('drop', async (e) => {
+  const day = e.target.closest?.('[data-drop-day]');
+  if (!day || !dragData) return;
+  e.preventDefault();
+  day.classList.remove('over');
+  const d = day.dataset.dropDay;
+  const data = dragData;
+  dragData = null;
+  const a = S.assets.find((x) => x.id === data.id);
+  if (!a) return;
+  if (!S._schedDefaults) S._schedDefaults = await api('GET', '/api/scheduling/defaults').catch(() => ({ times: {} }));
+  const time = data.kind === 'move' && a.scheduled_at ? tzTime(a.scheduled_at) : S._schedDefaults.times[a.channel] || '12:00';
+  const runAt = zonedToUtcClient(d, time);
+  if (new Date(runAt) <= new Date()) return toast('That time has already passed — drop it on a later day', 'bad');
+  try {
+    await api('POST', `/api/assets/${a.id}/schedule`, { runAt });
+    toast(`${data.kind === 'move' ? 'Moved' : 'Scheduled'} to ${fmtDate(d)} · ${time}`, 'ok');
+    await refreshCampaign();
+    render();
+  } catch (err) {
+    toast(err.message, 'bad');
+  }
+});
+document.addEventListener('dragend', () => {
+  dragData = null;
+  document.querySelectorAll('.cal-day.over').forEach((d) => d.classList.remove('over'));
+});
 
 boot().catch((e) => {
   $('#view').innerHTML = `<div class="empty">Failed to load: ${esc(e.message)}</div>`;
