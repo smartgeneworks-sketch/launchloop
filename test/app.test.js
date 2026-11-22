@@ -492,3 +492,35 @@ describe('soundtrack for uploaded / AI videos', () => {
     assert.equal(a.content.uploaded, true);
   });
 });
+
+describe('browser sign-in', () => {
+  let srv;
+  let base;
+  before(async () => {
+    srv = await start({ port: 0, dbFile: ':memory:', worker: false, appApiToken: 'secret-token-123' });
+    base = `http://localhost:${srv.port}`;
+  });
+  after(() => srv.server.close());
+
+  test('token is swapped for a year-long HttpOnly cookie that authorises the API; sign-out clears it', async () => {
+    assert.equal((await fetch(`${base}/api/workspaces`)).status, 401);
+    assert.equal((await fetch(`${base}/api/session`, { method: 'POST', body: JSON.stringify({ token: 'wrong' }) })).status, 401);
+    const r = await fetch(`${base}/api/session`, { method: 'POST', body: JSON.stringify({ token: 'secret-token-123' }) });
+    const cookie = r.headers.get('set-cookie');
+    assert.match(cookie, /HttpOnly/);
+    assert.match(cookie, /Max-Age=31536000/);
+    const c = cookie.split(';')[0];
+    assert.equal((await fetch(`${base}/api/workspaces`, { headers: { cookie: c } })).status, 200);
+    assert.equal((await (await fetch(`${base}/api/session`, { headers: { cookie: c } })).json()).signedIn, true);
+    assert.equal((await fetch(`${base}/api/workspaces`, { headers: { authorization: 'Bearer secret-token-123' } })).status, 200);
+    assert.match((await fetch(`${base}/api/session`, { method: 'DELETE' })).headers.get('set-cookie'), /Max-Age=0/);
+  });
+
+  test('www address redirects to the main address', async () => {
+    const http = await import('node:http');
+    const r = await new Promise((ok, no) => http.get({ port: srv.port, path: '/studio', headers: { host: 'www.applaunchloop.com' } }, ok).on('error', no));
+    r.resume();
+    assert.equal(r.statusCode, 301);
+    assert.equal(r.headers.location, 'https://applaunchloop.com/studio');
+  });
+});

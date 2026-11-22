@@ -24,7 +24,7 @@ Any channel without credentials automatically creates a Share Kit task. Nothing 
    - `PUBLIC_BASE_URL`: your Render URL, e.g. `https://launchloop.onrender.com`
    - `GEMINI_API_KEY` **or** `OPENAI_API_KEY`
    - X and/or LinkedIn tokens (optional; leave them blank to use the Share Kit)
-4. Deploy. Open the URL, paste `APP_API_TOKEN` (copy it from Render → Environment) when the app asks, then create your workspace and import your site.
+4. Deploy. Open the URL and sign in with `APP_API_TOKEN` (copy it from Render → Environment). The browser stays signed in for a year (a secure, HttpOnly cookie), and `www.` addresses redirect to the main address so you only sign in once. Then create your workspace and import your site.
 
 ## Option B: Fly.io
 

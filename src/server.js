@@ -47,6 +47,28 @@ export function createApp({ db, ai, config, publisher, worker, tts = new TTSServ
   const withAllowed = (a) => a && { ...a, allowed_next: allowedNext(a.state) };
 
   // ---------------------------------------------------------------- meta
+  // sign-in: swaps the API token for an HttpOnly cookie so the browser stays signed in
+  const sessionCookie = (req, value, maxAge) => {
+    const secure = req.headers['x-forwarded-proto'] === 'https' || req.socket?.encrypted ? '; Secure' : '';
+    return `ll_session=${encodeURIComponent(value)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secure}`;
+  };
+  on('POST', '/api/session', ({ req, res, body }) => {
+    if (!config.appApiToken) return { ok: true, authRequired: false };
+    const tok = String(body.token || '').trim();
+    if (!timingSafeEqualStr(tok, config.appApiToken)) throw new HttpError(401, 'That token is not right — copy APP_API_TOKEN from Render → Environment');
+    res.setHeader('set-cookie', sessionCookie(req, tok, body.remember === false ? 60 * 60 * 12 : 60 * 60 * 24 * 365));
+    return { ok: true };
+  }, { public: true });
+  on('GET', '/api/session', ({ req }) => {
+    if (!config.appApiToken) return { signedIn: true, authRequired: false };
+    const tok = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '') || readCookie(req, 'll_session');
+    return { signedIn: timingSafeEqualStr(tok, config.appApiToken), authRequired: true };
+  }, { public: true });
+  on('DELETE', '/api/session', ({ req, res }) => {
+    res.setHeader('set-cookie', sessionCookie(req, '', 0));
+    return { ok: true };
+  }, { public: true });
+
   on('GET', '/api/health', () => ({ ok: true, ai: ai.info(), publishMode: publisher.mode, worker: { intervalMs: config.workerIntervalMs, ...worker?.state }, authRequired: !!config.appApiToken, tts: { available: tts.info().available, model: tts.info().model, lastError: tts.lastError } }), { public: true });
   on('GET', '/api/config', () => ({ channels: CHANNELS, formats: FORMATS, states: STATES, taskCategories: TASK_CATEGORIES, publicBaseUrl: config.publicBaseUrl, fonts: FONTS, pairings: PAIRINGS }));
   on('POST', '/api/worker/tick', async () => worker.tick());
@@ -389,12 +411,18 @@ export function createApp({ db, ai, config, publisher, worker, tts = new TTSServ
   return async function handler(req, res) {
     const url = new URL(req.url, 'http://local');
     const pathname = url.pathname;
+    // one address for the app: www.example.com → example.com (browsers keep the sign-in per address)
+    const host = String(req.headers.host || '');
+    if (/^www\./i.test(host) && req.method === 'GET') {
+      res.writeHead(301, { location: `https://${host.slice(4)}${req.url}` });
+      return res.end();
+    }
     try {
       if (!pathname.startsWith('/api/')) return serveStatic(req, res, pathname);
       const route = routes.find((r) => r.method === req.method && r.re.test(pathname));
       if (!route) throw new HttpError(404, `No route for ${req.method} ${pathname}`);
       if (config.appApiToken && !route.public) {
-        const tok = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+        const tok = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '') || readCookie(req, 'll_session');
         if (!timingSafeEqualStr(tok, config.appApiToken)) throw new HttpError(401, 'Missing or invalid API token');
       }
       const m = pathname.match(route.re);
@@ -417,6 +445,11 @@ export function createApp({ db, ai, config, publisher, worker, tts = new TTSServ
       send(res, status, { error: e.message, ...(e.details ? { details: e.details } : {}) });
     }
   };
+}
+
+function readCookie(req, name) {
+  const m = String(req.headers.cookie || '').match(new RegExp(`(?:^|;\\s*)${name}=([^;]*)`));
+  return m ? decodeURIComponent(m[1]) : '';
 }
 
 export async function start(overrides = {}) {

@@ -330,3 +330,10 @@ html[data-theme='nuance'] .brand .logo-on-dark { display: none; }
 .media-add.ai { background: linear-gradient(135deg, var(--signal-soft), #fff); border-style: solid; border-color: var(--signal); color: var(--ink); font: inherit; font-weight: 600; }
 
 .media-item .btn.xs { justify-self: start; }
+
+/* sign-in */
+.signin-screen{position:fixed;inset:0;z-index:1000;display:grid;place-items:center;background:var(--paper);padding:20px}
+.signin-card{width:min(400px,100%);background:var(--card);color:var(--ink);border:1px solid var(--line);border-radius:16px;padding:28px;box-shadow:0 20px 60px rgba(0,0,0,.25)}
+.signin-card input[type=password]{width:100%;padding:11px 12px;border-radius:10px;border:1px solid var(--line);font:inherit;background:var(--card);color:inherit}
+.signin-logo{height:34px;width:auto;align-self:flex-start}
+.signin-err{color:var(--bad);min-height:1em}

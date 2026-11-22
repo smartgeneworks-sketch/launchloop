@@ -64,12 +64,10 @@ async function api(method, url, body) {
   const tok = localStorage.getItem('ll_token');
   if (tok) headers.authorization = `Bearer ${tok}`;
   const res = await fetch(url, { method, headers, body: body ? JSON.stringify(body) : undefined });
-  if (res.status === 401 && !url.includes('/webhooks/')) {
-    const t = prompt('This LaunchLoop instance requires an API token (APP_API_TOKEN):');
-    if (t) {
-      localStorage.setItem('ll_token', t);
-      return api(method, url, body);
-    }
+  if (res.status === 401 && !url.includes('/webhooks/') && !url.startsWith('/api/session')) {
+    localStorage.removeItem('ll_token');
+    await signIn();
+    return api(method, url, body);
   }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw Object.assign(new Error(data.error || `HTTP ${res.status}`), { data });
@@ -105,7 +103,58 @@ const modeBadge = (c) => (!c ? '' : c.mode === 'api' ? `<span class="badge b-api
 const conn = (channel) => S.channels.find((c) => c.channel === channel);
 
 // ------------------------------------------------------------------ data loading
+// ------------------------------------------------------------------ sign-in
+// The token is exchanged once for a secure HttpOnly cookie that lasts a year, so the browser stays signed in.
+let signInPending = null;
+function signIn() {
+  if (signInPending) return signInPending; // many requests can hit 401 at once — show one screen
+  signInPending = new Promise((resolve) => {
+    const el = document.createElement('div');
+    el.className = 'signin-screen';
+    el.innerHTML = `<form class="signin-card stack" autocomplete="on">
+      <img src="/brand/logo.png" alt="LaunchLoop" class="signin-logo">
+      <h2 style="margin:0">Sign in</h2>
+      <p class="muted small" style="margin:0">Paste your access token (<code>APP_API_TOKEN</code> in Render → Environment). Your password manager can save it.</p>
+      <input type="text" name="username" value="launchloop" autocomplete="username" hidden>
+      <input type="password" name="token" placeholder="Access token" autocomplete="current-password" required autofocus>
+      <label class="row small" style="gap:8px"><input type="checkbox" name="remember" checked> Keep me signed in on this browser for a year</label>
+      <div class="signin-err small" role="alert"></div>
+      <button class="btn signal" type="submit">Sign in</button>
+    </form>`;
+    document.body.appendChild(el);
+    el.querySelector('[name=token]').focus();
+    el.querySelector('form').onsubmit = async (ev) => {
+      ev.preventDefault();
+      const f = ev.target;
+      const btn = f.querySelector('button');
+      btn.disabled = true;
+      const r = await fetch('/api/session', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token: f.token.value.trim(), remember: f.remember.checked }) });
+      btn.disabled = false;
+      if (!r.ok) {
+        f.querySelector('.signin-err').textContent = (await r.json().catch(() => ({}))).error || 'Sign-in failed';
+        return;
+      }
+      el.remove();
+      signInPending = null;
+      resolve();
+    };
+  });
+  return signInPending;
+}
+async function ensureSession() {
+  const s = await fetch('/api/session').then((r) => r.json()).catch(() => ({ signedIn: true }));
+  if (s.signedIn) return;
+  const old = localStorage.getItem('ll_token'); // move a token saved by the old pop-up into the cookie
+  if (old) {
+    localStorage.removeItem('ll_token');
+    const r = await fetch('/api/session', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token: old, remember: true }) });
+    if (r.ok) return;
+  }
+  await signIn();
+}
+
 async function boot() {
+  await ensureSession();
   [S.health, S.config] = await Promise.all([api('GET', '/api/health'), api('GET', '/api/config')]);
   renderModes();
   await loadWorkspaces();
@@ -173,6 +222,7 @@ function renderModes() {
     ${err ? `<div class="ai-warn" title="${esc(err.message)}">⚠ AI request failed (${esc(err.message)}) — creatives fell back to templates. ${esc(err.hint || '')}</div>` : ''}
     <div class="mode-pill"><span><span class="dot ${h.publishMode === 'live' ? 'live' : ''}"></span>Publishing</span><b>${esc(h.publishMode)}</b></div>
     <div class="mode-pill"><span>Scheduler</span><b>every ${Math.round(h.worker.intervalMs / 1000)}s</b></div>
+    ${h.authRequired ? '<button class="link small" data-action="sign-out" style="text-align:left">Sign out</button>' : ''}
     <div class="theme-switch" title="App theme">${[['classic', 'Classic'], ['nuance', 'Nuance']].map(([k, l]) => `<button data-action="set-theme" data-v="${k}" class="${(document.documentElement.dataset.theme || 'nuance') === k ? 'on' : ''}">${l}</button>`).join('')}</div>`;
 }
 function renderSelectors() {
@@ -1148,6 +1198,11 @@ const actions = {
   },
   async png(el) {
     await svgToPng(el.dataset.src, el.dataset.name);
+  },
+  async 'sign-out'() {
+    await fetch('/api/session', { method: 'DELETE' });
+    localStorage.removeItem('ll_token');
+    location.reload();
   },
   'set-theme'(el) {
     localStorage.setItem('ll_theme', el.dataset.v);
