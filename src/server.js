@@ -198,7 +198,7 @@ export function createApp({ db, ai, config, publisher, worker, tts = new TTSServ
   }, { raw: true, public: true });
   on('GET', '/api/media/:id', ({ p, q, req, res }) => {
     const m = getMedia(db, p.id);
-    if (q.download && m?.path) res.setHeader('content-disposition', `attachment; filename="${p.id}.mp4"`);
+    if (q.download && m) res.setHeader('content-disposition', `attachment; filename="${p.id}.${m.path ? 'mp4' : (m.mime.split('/')[1] || 'png').replace('jpeg', 'jpg').replace('svg+xml', 'svg')}"`);
     if (!m) throw new HttpError(404, 'Media not found');
     if (!m.path) {
       res.writeHead(200, { 'content-type': m.mime, 'cache-control': 'public, max-age=86400' });

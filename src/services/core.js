@@ -418,7 +418,7 @@ export async function createAssetsFromUpload(ctx, campaignId, { mediaId, channel
   const campaign = must(db.byId('campaigns', campaignId), 'Campaign');
   const workspace = db.byId('workspaces', campaign.workspace_id);
   const media = db.get(null, 'SELECT id, kind, duration, width, height FROM media WHERE id = ? AND workspace_id = ?', mediaId, workspace.id);
-  if (!media || media.kind !== 'final') throw new HttpError(400, 'Upload the video first');
+  if (!media || !['final', 'video'].includes(media.kind)) throw new HttpError(400, 'Choose a video from the media library first');
   const chosen = channels.filter((c) => CHANNELS[c]);
   if (!chosen.length) throw new HttpError(400, 'Pick at least one channel');
   const ratio = media.width && media.height ? media.width / media.height : 9 / 16;

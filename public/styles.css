@@ -328,3 +328,5 @@ html[data-theme='nuance'] .brand .logo-on-dark { display: none; }
 .scene-thumb { position: relative; }
 
 .media-add.ai { background: linear-gradient(135deg, var(--signal-soft), #fff); border-style: solid; border-color: var(--signal); color: var(--ink); font: inherit; font-weight: 600; }
+
+.media-item .btn.xs { justify-self: start; }

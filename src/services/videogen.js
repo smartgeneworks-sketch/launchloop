@@ -2,8 +2,8 @@
  * AI motion clips with Gemini Omni Flash (Interactions API).
  * Jobs run in the background (generation can take minutes); results are converted
  * and stored in the media library via addVideo(), and optionally assigned to a scene.
- * Generated clips carry Google's SynthID watermark. Audio is dropped on import —
- * reels get LaunchLoop's voiceover and music instead.
+ * Generated clips carry Google's SynthID watermark. The AI soundtrack is kept for
+ * standalone posts; inside reel scenes the clip plays muted under the voiceover/music.
  */
 import { CHANNELS } from '../lib/channels.js';
 import { HttpError, id, nowIso } from '../lib/util.js';
@@ -116,7 +116,7 @@ export class VideoGen {
   async run(job) {
     const ws = this.db.byId('workspaces', job.workspace_id);
     const buffer = await this.generate(job);
-    const media = await addVideo(this.db, ws, { buffer, mime: 'video/mp4', name: `ai-clip-${job.id.slice(5)}.mp4`, label: `AI · ${job.label}`, dataDir: this.config.dataDir });
+    const media = await addVideo(this.db, ws, { buffer, mime: 'video/mp4', name: `ai-clip-${job.id.slice(5)}.mp4`, label: `AI · ${job.label}`, dataDir: this.config.dataDir, keepAudio: true });
     this.db.update('ai_video_jobs', job.id, { status: 'done', media_id: media.id, error: null });
     if (job.asset_id != null && job.scene_index != null) this.assignToScene(job.asset_id, Number(job.scene_index), media.id);
     return media;

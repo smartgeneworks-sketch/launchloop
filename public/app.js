@@ -296,7 +296,7 @@ function viewWorkspace() {
       </div>
       <h3 style="margin-top:18px">Media library <span class="muted small">— screenshots & pictures for your demos</span></h3>
       <p class="muted small" style="margin:0 0 8px">Label each image or clip with what it shows (e.g. “upload camera roll photo”, “auto-crop result”, “print sheet 35×45”). Short screen recordings make the most convincing demo scenes. Video scenes automatically pick the image whose label matches the scene, and you can choose exactly which image appears in each scene in the video editor.</p>
-      <div class="media-grid">${(S.media || []).map((m) => `<figure class="media-item">${m.kind === 'video' || m.kind === 'final' ? `<div class="media-vid">${m.posterUrl ? `<img src="${esc(m.posterUrl)}" alt="">` : `<video src="${esc(m.url)}#t=0.5" muted preload="metadata"></video>`}<span class="vid-badge">${m.kind === 'final' ? '🎞 finished · ' : '▶ '}${m.duration ? m.duration.toFixed(1) + 's' : 'clip'}</span></div>` : `<img src="${esc(m.url)}" alt="" loading="lazy">`}<input type="text" value="${esc(m.label || '')}" placeholder="What does this show?" data-media-label="${esc(m.id)}"><div class="row" style="justify-content:space-between"><span class="muted small">${m.brandKit ? 'brand kit' : esc(Math.round((m.bytes || 0) / 1024) + ' KB')}</span>${m.brandKit ? `<button type="button" class="link small" data-action="remove-shot" data-i="${esc(m.id.split('_').pop())}">remove</button>` : `<button type="button" class="link small" data-action="delete-media" data-id="${esc(m.id)}">delete</button>`}</div></figure>`).join('')}
+      <div class="media-grid">${(S.media || []).map((m) => `<figure class="media-item">${m.kind === 'video' || m.kind === 'final' ? `<div class="media-vid">${m.posterUrl ? `<img src="${esc(m.posterUrl)}" alt="">` : `<video src="${esc(m.url)}#t=0.5" muted preload="metadata"></video>`}<span class="vid-badge">${m.kind === 'final' ? '🎞 finished · ' : '▶ '}${m.duration ? m.duration.toFixed(1) + 's' : 'clip'}</span></div>` : `<img src="${esc(m.url)}" alt="" loading="lazy">`}<input type="text" value="${esc(m.label || '')}" placeholder="What does this show?" data-media-label="${esc(m.id)}"><div class="row" style="justify-content:space-between"><span class="muted small">${m.brandKit ? 'brand kit' : esc(Math.round((m.bytes || 0) / 1024) + ' KB')}</span><span class="row" style="gap:8px"><a class="link small" href="${esc(m.url)}?download=1" title="Download">⬇</a>${m.brandKit ? `<button type="button" class="link small" data-action="remove-shot" data-i="${esc(m.id.split('_').pop())}">remove</button>` : `<button type="button" class="link small" data-action="delete-media" data-id="${esc(m.id)}">delete</button>`}</span></div>${m.kind === 'video' || m.kind === 'final' ? `<button type="button" class="btn ghost xs" data-action="media-to-campaign" data-id="${esc(m.id)}" ${S.campaign ? '' : 'disabled'}>➕ Add to campaign</button>` : ''}</figure>`).join('')}
         <label class="media-add">+ Upload images or clips<span class="muted small">PNG / JPG · MP4 / MOV screen recordings (keep clips short, under 80 MB)</span><input type="file" accept="image/*,video/mp4,video/quicktime,video/webm" multiple data-upload="media" hidden></label>
         <button type="button" class="media-add ai" data-action="ai-clip">✨ Generate AI clip<span class="muted small">Gemini Omni Flash · 3–15 s · for lifestyle & mood shots</span></button></div>
       ${aiJobsList()}
@@ -569,7 +569,7 @@ function aiJobsList() {
   const jobs = (S.vjobs || []).slice(0, 6);
   if (!jobs.length) return '';
   const st = { queued: '⏳ queued', running: '✨ generating…', done: '✅ ready', failed: '⚠ failed' };
-  return `<div class="list small" style="margin-top:10px"><div class="eyebrow">AI clips</div>${jobs.map((j) => `<div class="li"><span class="lvl ${j.status === 'done' ? 'success' : j.status === 'failed' ? 'error' : 'info'}"></span><div class="grow"><b>${st[j.status] || j.status}</b> · ${esc(j.label || j.prompt.slice(0, 60))} <span class="muted">· ${j.duration}s ${esc(j.aspect)} · ${esc(rel(j.created_at))}</span>${j.error ? `<div class="err" style="margin-top:4px">${esc(j.error)}</div>` : ''}</div></div>`).join('')}</div>`;
+  return `<div class="list small" style="margin-top:10px"><div class="eyebrow">AI clips</div>${jobs.map((j) => `<div class="li"><span class="lvl ${j.status === 'done' ? 'success' : j.status === 'failed' ? 'error' : 'info'}"></span><div class="grow"><b>${st[j.status] || j.status}</b> · ${esc(j.label || j.prompt.slice(0, 60))} <span class="muted">· ${j.duration}s ${esc(j.aspect)} · ${esc(rel(j.created_at))}</span>${j.error ? `<div class="err" style="margin-top:4px">${esc(j.error)}</div>` : ''}${j.status === 'done' && j.media_id ? `<div class="row" style="gap:6px;margin-top:4px"><a class="btn ghost xs" href="/api/media/${esc(j.media_id)}?download=1">⬇ Download</a><button type="button" class="btn ghost xs" data-action="media-to-campaign" data-id="${esc(j.media_id)}" ${S.campaign ? '' : 'disabled'}>➕ Add to campaign</button></div>` : ''}</div></div>`).join('')}</div>`;
 }
 async function loadVJobs() {
   if (!S.wsId) return;
@@ -631,6 +631,23 @@ function openUploadFinal() {
     <div class="row"><button class="btn signal">Upload & create creatives</button><button type="button" class="btn ghost" data-action="close">Cancel</button></div>
   </form>`, { narrow: true });
 }
+function openMediaToCampaign(mediaId) {
+  const m = (S.media || []).find((x) => x.id === mediaId);
+  if (!m) return toast('Clip not found — refresh the page', 'bad');
+  const vid = S.campaign.channels.filter((c) => S.config.channels[c]);
+  const isAi = /^AI · /.test(m.label || '');
+  openModal(`${modalHead('➕ Add video to campaign')}
+  <form class="modal-body stack" data-form="media-to-campaign" data-id="${esc(m.id)}">
+    <div class="row" style="gap:12px;align-items:flex-start"><video src="${esc(m.url)}" controls muted playsinline style="width:140px;max-height:220px;border-radius:8px;background:#000"></video>
+      <div class="muted small">Creates a draft creative for each channel in <b>${esc(S.campaign.name)}</b>, with captions and a tracked link. It then goes through approval, scheduling and the Share Kit (MP4 download) like any other creative.${isAi ? '<br><br>AI-generated clips include Google’s invisible SynthID watermark. Some platforms ask you to label realistic AI content when posting — follow each platform’s rules.' : ''}</div></div>
+    <label class="f">Title<input type="text" name="title" required value="${esc((m.label || m.name || 'Video').replace(/^AI · /, ''))}"></label>
+    <label class="f">What's in the video? <span class="hint">helps the AI write accurate captions</span><textarea name="description" rows="2"></textarea></label>
+    <div class="f">Post it on<div class="chips" style="margin-top:6px">${vid.map((c) => `<label class="chip-check"><input type="checkbox" name="channels" value="${c}" ${['instagram', 'tiktok', 'youtube_shorts', 'whatsapp_status'].includes(c) ? 'checked' : ''}>${esc(ch(c).label)}</label>`).join('')}</div></div>
+    <label class="check small"><input type="checkbox" name="ai" checked> Write captions with AI for each channel</label>
+    <div class="row"><button class="btn signal">Create creatives</button><button type="button" class="btn ghost" data-action="close">Cancel</button></div>
+  </form>`, { narrow: true });
+}
+
 function uploadFinal(file, title, onProgress) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
@@ -1146,6 +1163,9 @@ const actions = {
   'upload-final'() {
     openUploadFinal();
   },
+  'media-to-campaign'(el) {
+    openMediaToCampaign(el.dataset.id);
+  },
   'auto-schedule'() {
     openAutoSchedule().catch((e) => toast(e.message, 'bad'));
   },
@@ -1429,6 +1449,17 @@ const forms = {
     closeModal();
     toast(`✨ Generating ${jobs.length} clip(s) — usually a few minutes. Each is added to its scene when ready.`, 'ok');
     await loadVJobs();
+  },
+  async 'media-to-campaign'(f, fd, btn) {
+    const channels = fd.getAll('channels');
+    if (!channels.length) return toast('Pick at least one channel', 'bad');
+    const r = await busy(btn, () => api('POST', `/api/campaigns/${S.cmpId}/assets/from-upload`, { mediaId: f.dataset.id, channels, title: fd.get('title'), description: fd.get('description'), aiCaptions: !!fd.get('ai') }));
+    closeModal();
+    await refreshCampaign();
+    S.ui.studioState = 'DRAFT';
+    toast(`Created ${r.created.length} draft creative(s) — opening the Studio`, 'ok');
+    location.hash = '#/studio';
+    render();
   },
   async 'upload-final'(f, fd, btn) {
     const file = fd.get('file');

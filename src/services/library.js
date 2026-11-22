@@ -71,7 +71,7 @@ export const mediaDataUrl = (db, mediaId) => {
  * H.264 MP4 (≤1080p, 30 fps, no audio — scenes get voiceover/music instead) so every
  * browser can play it, and a poster frame is extracted for previews.
  */
-export async function addVideo(db, ws, { buffer, mime, name, label, dataDir }) {
+export async function addVideo(db, ws, { buffer, mime, name, label, dataDir, keepAudio = false }) {
   const ext = VIDEO_TYPES[String(mime).split(';')[0]];
   if (!ext) throw new HttpError(400, 'Upload an MP4, MOV or WebM video');
   if (!buffer?.length) throw new HttpError(400, 'Empty file');
@@ -87,7 +87,7 @@ export async function addVideo(db, ws, { buffer, mime, name, label, dataDir }) {
   let poster = null;
   try {
     const mp4 = path.join(dir, `${mid}.mp4`);
-    await run('ffmpeg', ['-y', '-v', 'error', '-i', original, '-vf', "scale='min(1920,iw)':-2,fps=30", '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '22', '-pix_fmt', 'yuv420p', '-an', '-movflags', '+faststart', mp4]);
+    await run('ffmpeg', ['-y', '-v', 'error', '-i', original, '-vf', "scale='min(1920,iw)':-2,fps=30", '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '22', '-pix_fmt', 'yuv420p', ...(keepAudio ? ['-c:a', 'aac', '-b:a', '160k'] : ['-an']), '-movflags', '+faststart', mp4]);
     fs.rmSync(original, { force: true });
     file = mp4;
     outMime = 'video/mp4';
