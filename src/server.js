@@ -16,9 +16,9 @@ import * as core from './services/core.js';
 import { buildRenderJob, renderAssetSvg } from './services/media.js';
 import { Publisher } from './services/publisher.js';
 import { scoreAsset } from './services/scorer.js';
-import { TTSService, assetVoiceover } from './services/tts.js';
+import { TTSService, assetVoiceover, wavDuration } from './services/tts.js';
 import { FontService } from './services/fonts.js';
-import { addFinalVideo, addMedia, addVideo, deleteMedia, getMedia, listMedia, mediaDataUrl, resolveSceneMedia } from './services/library.js';
+import { addFinalVideo, addMedia, addMuxedVideo, addVideo, deleteMedia, getMedia, listMedia, mediaDataUrl, resolveSceneMedia } from './services/library.js';
 import { VideoGen, scenePrompt } from './services/videogen.js';
 import { FONTS, PAIRINGS } from './lib/fonts.js';
 import { Notifier } from './services/notify.js';
@@ -117,6 +117,12 @@ export function createApp({ db, ai, config, publisher, worker, tts = new TTSServ
     return db.update('creative_assets', a.id, { score: scoreAsset(a, ws) }).score;
   });
   on('GET', '/api/tts', () => tts.info());
+  on('POST', '/api/tts/speak', async ({ body }) => {
+    const text = String(body.text || '').trim().slice(0, 1500);
+    if (!text) throw new HttpError(400, 'Write the voiceover script first');
+    const wav = await tts.synthesize(text, { voice: body.voice || 'Puck', style: String(body.style || '').slice(0, 80) });
+    return { audio: wav.toString('base64'), duration: wavDuration(wav) };
+  });
   on('POST', '/api/assets/:id/voiceover', async ({ p, body }) => {
     const a = must(db.byId('creative_assets', p.id), 'Asset');
     if (!['reel', 'video'].includes(a.format)) throw new HttpError(400, 'Voiceover is only for reels and short videos');
@@ -269,6 +275,29 @@ export function createApp({ db, ai, config, publisher, worker, tts = new TTSServ
     });
     return addFinalVideo(db, ws, { tmpPath: tmp, mime: headers['content-type'], name: q.name, label: q.label, dataDir: config.dataDir });
   }, { stream: true });
+  // Soundtrack for uploaded / AI videos: the browser sends the mixed WAV, we mux it with the original picture.
+  on('POST', '/api/assets/:id/soundtrack', async ({ p, q, rawBody }) => {
+    const a = must(db.byId('creative_assets', p.id), 'Asset');
+    if (!a.content?.uploaded) throw new HttpError(400, 'Soundtracks here are for uploaded and AI videos — reels get music when you download them');
+    if (a.state === 'PUBLISHED') throw new HttpError(409, 'Published creatives can’t be changed');
+    if (!rawBody?.length) throw new HttpError(400, 'No audio received');
+    const ws = db.get('workspaces', 'SELECT w.* FROM workspaces w JOIN campaigns c ON c.workspace_id = w.id WHERE c.id = ?', a.campaign_id);
+    const originalId = a.content.originalMediaId || a.content.mediaId;
+    const tmp = path.join(os.tmpdir(), `ll-mix-${Date.now()}.wav`);
+    fs.writeFileSync(tmp, rawBody);
+    try {
+      const m = await addMuxedVideo(db, ws, { videoMediaId: originalId, audioPath: tmp, label: a.title, dataDir: config.dataDir });
+      const soundtrack = { music: String(q.music || 'none').slice(0, 40), musicVolume: Number(q.mv) || 0, originalVolume: Number(q.ov) || 0, voiceover: q.vo === '1', at: new Date().toISOString() };
+      return withAllowed(core.editAsset(ctx, a.id, { content: { mediaId: m.id, originalMediaId: originalId, soundtrack } }));
+    } finally {
+      fs.rmSync(tmp, { force: true });
+    }
+  }, { binary: true, maxBody: 90 * 1024 * 1024 });
+  on('POST', '/api/assets/:id/soundtrack/reset', ({ p }) => {
+    const a = must(db.byId('creative_assets', p.id), 'Asset');
+    if (!a.content?.originalMediaId) return withAllowed(a);
+    return withAllowed(core.editAsset(ctx, a.id, { content: { mediaId: a.content.originalMediaId, soundtrack: null } }));
+  });
   on('POST', '/api/campaigns/:id/assets/from-upload', ({ p, body }) => core.createAssetsFromUpload(ctx, p.id, body));
 
   // ---------------------------------------------------------------- bulk scheduling

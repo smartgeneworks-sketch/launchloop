@@ -981,7 +981,7 @@ async function openAsset(assetId, slide = 0) {
     <div><div class="pv">${c.uploaded ? `<video src="/api/media/${esc(c.mediaId)}" controls playsinline preload="metadata" style="max-width:100%;max-height:520px;border-radius:8px"></video>` : `<img src="${mediaUrl(a, slide)}" alt="preview">`}</div>
       ${slides ? `<div class="row" style="justify-content:center;margin-top:8px">${Array.from({ length: slides }, (_, i) => `<button class="chip ${i === slide ? 'on' : ''}" data-action="slide" data-id="${a.id}" data-i="${i}">${i + 1}</button>`).join('')}</div>` : ''}
       <div class="row" style="justify-content:center;margin-top:10px">${c.uploaded ? '' : `<a class="btn ghost sm" href="${mediaUrl(a, slide)}" download="${a.channel}-${a.format}.svg">Download SVG</a><button class="btn ghost sm" data-action="png" data-src="${mediaUrl(a, slide)}" data-name="${a.channel}-${a.format}-${slide + 1}.png">Download PNG</button>`}<button class="btn signal sm" data-action="share-kit" data-id="${a.id}">Share Kit</button></div>
-      ${c.uploaded ? `<div class="row" style="justify-content:center;margin-top:8px"><a class="btn sm" href="/api/media/${esc(c.mediaId)}?download=1">⬇ Download video (MP4)</a></div>` : ''}
+      ${c.uploaded ? `<div class="row" style="justify-content:center;margin-top:8px;gap:6px">${a.state !== 'PUBLISHED' ? `<button class="btn signal sm" data-action="soundtrack" data-id="${a.id}">🎵 Music & voiceover</button>` : ''}<a class="btn sm" href="/api/media/${esc(c.mediaId)}?download=1">⬇ Download video (MP4)</a></div>${c.soundtrack ? `<p class="muted small" style="text-align:center;margin:6px 0 0">Soundtrack: ${esc(c.soundtrack.music === 'none' ? 'no music' : c.soundtrack.music === 'upload' ? 'your track' : (MUSIC_MOODS[c.soundtrack.music]?.label || c.soundtrack.music))}${c.soundtrack.voiceover ? ' + voiceover' : ''} · <button class="link small" data-action="soundtrack-reset" data-id="${a.id}">restore original sound</button></p>` : ''}` : ''}
       ${(a.format === 'reel' || a.format === 'video') && !c.uploaded ? `<div class="row" style="justify-content:center;margin-top:8px"><button class="btn sm" data-action="record-video" data-id="${a.id}">🎬 Download video (${c.durationSec || ''}s)</button></div><p class="muted small" style="text-align:center;margin:6px 0 0">With AI voiceover, music and burned-in captions. Records in real time — keep this tab open.</p>` : ''}
       <div class="card" style="margin-top:14px"><div class="card-head" style="margin-bottom:8px"><h3 style="margin:0">Hook & virality advisor</h3><button class="link small" data-action="rescore" data-id="${a.id}">Re-score</button></div>
         ${Object.entries({ hook: 'Hook clarity', showDontTell: 'Show-don’t-tell', shareability: 'Shareability', cta: 'CTA & link' }).map(([k, l]) => `<div class="dim"><span>${l}</span><div class="bar ${sc.dims?.[k] >= 70 ? 'ok' : 'signal'}"><i style="width:${sc.dims?.[k] || 0}%"></i></div><span class="mono">${sc.dims?.[k] ?? '–'}</span></div>`).join('')}
@@ -1162,6 +1162,69 @@ const actions = {
   },
   'upload-final'() {
     openUploadFinal();
+  },
+  soundtrack(el) {
+    openSoundtrack(el.dataset.id).catch((e) => toast(e.message, 'bad'));
+  },
+  async 'soundtrack-reset'(el) {
+    await api('POST', `/api/assets/${el.dataset.id}/soundtrack/reset`);
+    toast('Original sound restored', 'ok');
+    await afterAssetChange(el.dataset.id);
+  },
+  async 'mix-preview'(el) {
+    const a = S.assets.find((x) => x.id === el.dataset.id) || (await api('GET', `/api/assets/${el.dataset.id}`));
+    const opts = mixOpts();
+    if (opts.music === 'upload' && !opts.musicFile) return toast('Choose a music file first', 'bad');
+    const label = el.textContent;
+    el.classList.add('busy');
+    try {
+      const buf = await buildClipMix(a, opts, (t) => (el.textContent = t));
+      S._mixAudio?.pause();
+      const audio = new Audio(URL.createObjectURL(encodeWav(buf)));
+      S._mixAudio = audio;
+      const v = $('#mixVideo');
+      v.muted = true;
+      v.currentTime = 0;
+      audio.currentTime = 0;
+      await Promise.all([v.play(), audio.play()]);
+      audio.onended = () => v.pause();
+    } catch (e) {
+      toast(e.message, 'bad');
+    } finally {
+      el.classList.remove('busy');
+      el.textContent = label;
+    }
+  },
+  async 'mix-apply'(el) {
+    const id = el.dataset.id;
+    const a = S.assets.find((x) => x.id === id) || (await api('GET', `/api/assets/${id}`));
+    const opts = mixOpts();
+    if (opts.music === 'upload' && !opts.musicFile) return toast('Choose a music file first', 'bad');
+    if (opts.music === 'none' && opts.originalVolume === 0 && !opts.voiceover) return toast('That would make the video silent — add music, a voiceover or keep some original sound', 'bad');
+    const label = el.textContent;
+    el.classList.add('busy');
+    try {
+      S._mixAudio?.pause();
+      const buf = await buildClipMix(a, opts, (t) => (el.textContent = t));
+      el.textContent = 'Saving video…';
+      const headers = { 'content-type': 'audio/wav' };
+      const tok = localStorage.getItem('ll_token');
+      if (tok) headers.authorization = `Bearer ${tok}`;
+      const q = new URLSearchParams({ music: opts.music, mv: opts.musicVolume, ov: opts.originalVolume, vo: opts.voiceover ? '1' : '0' });
+      const r = await fetch(`/api/assets/${id}/soundtrack?${q}`, { method: 'POST', headers, body: encodeWav(buf) });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+      closeModal();
+      S.media = await api('GET', `/api/workspaces/${S.wsId}/media`);
+      toast(`Soundtrack added${data.state !== a.state ? ` — moved to ${STATE_LABEL[data.state]}` : ''}`, 'ok');
+      await afterAssetChange(id);
+      openAsset(id);
+    } catch (e) {
+      toast(e.message, 'bad');
+    } finally {
+      el.classList.remove('busy');
+      el.textContent = label;
+    }
   },
   'media-to-campaign'(el) {
     openMediaToCampaign(el.dataset.id);
@@ -1791,6 +1854,154 @@ async function buildSoundtrack(asset, sb, opts, onProgress) {
     src.start(s.voAt);
   });
   return { timeline, D, buffer: await ctx.startRendering() };
+}
+
+// ---- soundtrack for uploaded / AI videos (mixed in the browser, muxed on the server)
+function encodeWav(buffer) {
+  const ch = buffer.numberOfChannels;
+  const len = buffer.length * ch * 2;
+  const out = new DataView(new ArrayBuffer(44 + len));
+  const w = (o, str) => [...str].forEach((c, i) => out.setUint8(o + i, c.charCodeAt(0)));
+  w(0, 'RIFF');
+  out.setUint32(4, 36 + len, true);
+  w(8, 'WAVE');
+  w(12, 'fmt ');
+  out.setUint32(16, 16, true);
+  out.setUint16(20, 1, true);
+  out.setUint16(22, ch, true);
+  out.setUint32(24, buffer.sampleRate, true);
+  out.setUint32(28, buffer.sampleRate * ch * 2, true);
+  out.setUint16(32, ch * 2, true);
+  out.setUint16(34, 16, true);
+  w(36, 'data');
+  out.setUint32(40, len, true);
+  const data = [...Array(ch)].map((_, i) => buffer.getChannelData(i));
+  let o = 44;
+  for (let i = 0; i < buffer.length; i++)
+    for (let c = 0; c < ch; c++) {
+      const v = Math.max(-1, Math.min(1, data[c][i]));
+      out.setInt16(o, v < 0 ? v * 0x8000 : v * 0x7fff, true);
+      o += 2;
+    }
+  return new Blob([out], { type: 'audio/wav' });
+}
+
+async function buildClipMix(asset, opts, onProgress) {
+  const c = asset.content;
+  const srcId = c.originalMediaId || c.mediaId;
+  const media = (S.media || []).find((m) => m.id === srcId);
+  const rate = 48000;
+  const decoder = new OfflineAudioContext(2, rate, rate);
+  onProgress?.('Reading the video…');
+  let original = null;
+  try {
+    original = await decoder.decodeAudioData(await (await fetch(`/api/media/${srcId}`)).arrayBuffer());
+  } catch {
+    original = null; // clip has no sound track
+  }
+  const D = Math.max(1, media?.duration || c.durationSec || original?.duration || 10);
+  let vo = null;
+  if (opts.voiceover && opts.script.trim()) {
+    onProgress?.('Generating voiceover…');
+    const r = await api('POST', '/api/tts/speak', { text: opts.script, voice: opts.voice, style: opts.style });
+    vo = await decoder.decodeAudioData(b64ToBuf(r.audio));
+    if (vo.duration > D - 0.3) toast(`The voiceover (${vo.duration.toFixed(1)}s) is longer than the video (${D.toFixed(1)}s) — it will be cut off. Shorten the script.`, 'bad');
+  }
+  onProgress?.('Mixing…');
+  const ctx = new OfflineAudioContext(2, Math.ceil(D * rate), rate);
+  const master = ctx.createDynamicsCompressor();
+  master.threshold.value = -14;
+  master.ratio.value = 3;
+  master.connect(ctx.destination);
+  const voStart = 0.3;
+  const voEnd = vo ? voStart + vo.duration : 0;
+  const duck = (gainNode, level, factor) => {
+    gainNode.gain.setValueAtTime(level, 0);
+    if (vo) {
+      gainNode.gain.setValueAtTime(level, Math.max(0, voStart - 0.2));
+      gainNode.gain.linearRampToValueAtTime(level * factor, voStart);
+      gainNode.gain.setValueAtTime(level * factor, voEnd);
+      gainNode.gain.linearRampToValueAtTime(level, voEnd + 0.3);
+    }
+  };
+  if (original && opts.originalVolume > 0) {
+    const g = ctx.createGain();
+    duck(g, opts.originalVolume, 0.35);
+    const src = ctx.createBufferSource();
+    src.buffer = original;
+    src.connect(g).connect(master);
+    src.start(0);
+  }
+  if (opts.music !== 'none') {
+    const mg = ctx.createGain();
+    duck(mg, opts.musicVolume, 0.3);
+    mg.gain.setValueAtTime(mg.gain.value, Math.max(0, D - 1.2));
+    mg.gain.linearRampToValueAtTime(0, D);
+    mg.connect(master);
+    if (opts.music === 'upload' && opts.musicFile) {
+      const buf = await ctx.decodeAudioData(await opts.musicFile.arrayBuffer());
+      const src = ctx.createBufferSource();
+      src.buffer = buf;
+      src.loop = true;
+      src.connect(mg);
+      src.start(0);
+    } else synthMusic(ctx, mg, opts.music, D);
+  }
+  if (vo) {
+    const src = ctx.createBufferSource();
+    src.buffer = vo;
+    const g = ctx.createGain();
+    g.gain.value = 1.1;
+    src.connect(g).connect(master);
+    src.start(voStart);
+  }
+  return ctx.startRendering();
+}
+
+async function openSoundtrack(assetId) {
+  const a = await api('GET', `/api/assets/${assetId}`);
+  const tts = await api('GET', '/api/tts').catch(() => ({ available: false, voices: [] }));
+  const saved = JSON.parse(localStorage.getItem('ll_clipmix') || '{}');
+  const srcId = a.content.originalMediaId || a.content.mediaId;
+  const media = (S.media || []).find((m) => m.id === srcId);
+  const dur = media?.duration || a.content.durationSec || 0;
+  const isAi = /^AI · /.test(media?.label || '');
+  const voices = tts.voices?.length ? tts.voices : [{ id: 'Puck', label: 'Puck — upbeat' }];
+  openModal(`${modalHead('🎵 Music & voiceover')}
+  <form class="modal-body stack" id="clipMix" onsubmit="return false">
+    <div class="row" style="gap:14px;align-items:flex-start">
+      <video id="mixVideo" src="/api/media/${esc(srcId)}" playsinline preload="auto" style="width:150px;max-height:260px;border-radius:8px;background:#000"></video>
+      <div class="muted small">Adds a soundtrack to this ${isAi ? 'AI clip' : 'video'}${dur ? ` (${dur.toFixed(1)}s)` : ''}. The picture isn't re-encoded, and the original stays saved — you can redo this or restore the original sound any time.${['APPROVED', 'SCHEDULED'].includes(a.state) ? '<br><br><b>Changing the sound sends this creative back to review.</b>' : ''}</div>
+    </div>
+    <div class="card stack" style="gap:10px"><b>🎵 Music</b>
+      <div class="form-grid">
+        <label class="f">Track<select name="music" onchange="document.getElementById('mixUpload').style.display=this.value==='upload'?'block':'none'">
+          ${Object.entries(MUSIC_MOODS).map(([k, m]) => `<option value="${k}" ${k === (saved.music || 'upbeat') ? 'selected' : ''}>Generated · ${m.label}</option>`).join('')}
+          <option value="upload" ${saved.music === 'upload' ? 'selected' : ''}>Upload my own track…</option>
+          <option value="none" ${saved.music === 'none' ? 'selected' : ''}>No music</option></select></label>
+        <label class="f">Music volume<input type="range" name="musicVolume" min="0" max="100" value="${saved.musicVolume ?? 55}"></label>
+      </div>
+      <div id="mixUpload" style="display:${saved.music === 'upload' ? 'block' : 'none'}"><input type="file" name="musicFile" accept="audio/*"><div class="muted small">MP3, WAV or M4A you have the rights to. It loops to fit and fades out.</div></div>
+    </div>
+    <div class="card stack" style="gap:10px"><b>🔊 Original sound</b>
+      <label class="f">Level <span class="hint">${isAi ? 'the sound Gemini generated with the clip' : 'the sound recorded in the video'} — 0 mutes it</span><input type="range" name="originalVolume" min="0" max="100" value="${saved.originalVolume ?? (isAi ? 40 : 100)}"></label>
+    </div>
+    <div class="card stack" style="gap:10px">
+      <label class="row" style="justify-content:space-between"><b>🎙 Voiceover</b><span class="toggle"><input type="checkbox" name="voiceover" ${tts.available ? '' : 'disabled'}><span></span></span></label>
+      ${tts.available ? `<label class="f">Script <span class="hint">about ${Math.max(1, Math.round((dur || 10) * 2.3))} words fits ${dur ? dur.toFixed(0) + 's' : 'the video'}</span><textarea name="script" rows="3">${esc(a.headline || '')}</textarea></label>
+      <div class="form-grid"><label class="f">Voice<select name="voice">${voices.map((v) => `<option value="${esc(v.id)}" ${v.id === (saved.voice || 'Puck') ? 'selected' : ''}>${esc(v.label)}</option>`).join('')}</select></label>
+      <label class="f">Delivery style<input type="text" name="style" value="${esc(saved.style ?? 'warm and upbeat')}"></label></div>` : '<div class="muted small">Needs GEMINI_API_KEY or OPENAI_API_KEY on the server.</div><input type="hidden" name="script" value=""><input type="hidden" name="voice" value="Puck"><input type="hidden" name="style" value="">'}
+    </div>
+    <div class="row"><button type="button" class="btn ghost" data-action="mix-preview" data-id="${a.id}">▶ Preview</button><button type="button" class="btn signal" data-action="mix-apply" data-id="${a.id}">Apply to video</button><button type="button" class="btn ghost" data-action="close">Cancel</button></div>
+  </form>`, { narrow: true });
+}
+function mixOpts() {
+  const f = $('#clipMix');
+  const g = (n) => f.querySelector(`[name=${n}]`);
+  const o = { music: g('music').value, musicVolume: Number(g('musicVolume').value) / 100, originalVolume: Number(g('originalVolume').value) / 100, voiceover: !!g('voiceover')?.checked, script: g('script')?.value || '', voice: g('voice')?.value || 'Puck', style: g('style')?.value || '', musicFile: g('musicFile')?.files?.[0] || null };
+  const { musicFile, script, ...persist } = o;
+  localStorage.setItem('ll_clipmix', JSON.stringify(persist));
+  return o;
 }
 
 async function recordVideo(assetId, opts, actx, onProgress) {

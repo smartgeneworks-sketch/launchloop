@@ -461,3 +461,34 @@ describe('AI motion clips + uploaded finished videos', () => {
     assert.equal(rg.asset.content.mediaId, m.id);
   });
 });
+
+describe('soundtrack for uploaded / AI videos', () => {
+  test('mixed WAV is muxed onto the clip without re-encoding the picture; original kept', async () => {
+    try {
+      execFileSyncTop('ffmpeg', ['-version'], { stdio: 'ignore' });
+    } catch {
+      return;
+    }
+    const fs = await import('node:fs');
+    const os = await import('node:os');
+    const path = await import('node:path');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lls-'));
+    const mp4 = path.join(dir, 'clip.mp4');
+    const wav = path.join(dir, 'mix.wav');
+    execFileSyncTop('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc=size=360x640:rate=24:duration=3', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', mp4]);
+    execFileSyncTop('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=330:duration=3', '-ac', '2', '-ar', '48000', wav]);
+    const { addFinalVideo, addMuxedVideo } = await import('../src/services/library.js');
+    const { ctx, workspace, campaign } = await setup();
+    const orig = await addFinalVideo(ctx.db, workspace, { tmpPath: mp4, mime: 'video/mp4', name: 'clip.mp4', label: 'AI · test', dataDir: dir });
+    const { created } = await core.createAssetsFromUpload(ctx, campaign.id, { mediaId: orig.id, channels: ['instagram'], title: 'Clip', aiCaptions: false });
+    const m = await addMuxedVideo(ctx.db, workspace, { videoMediaId: orig.id, audioPath: wav, label: 'Clip + music', dataDir: dir });
+    const row = ctx.db.get(null, 'SELECT * FROM media WHERE id = ?', m.id);
+    const probe = execFileSyncTop('ffprobe', ['-v', 'error', '-show_entries', 'stream=codec_name', '-of', 'csv=p=0', row.path]).toString();
+    assert.match(probe, /h264/);
+    assert.match(probe, /aac/);
+    const a = core.editAsset(ctx, created[0], { content: { mediaId: m.id, originalMediaId: orig.id, soundtrack: { music: 'upbeat' } } });
+    assert.equal(a.content.mediaId, m.id);
+    assert.equal(a.content.originalMediaId, orig.id);
+    assert.equal(a.content.uploaded, true);
+  });
+});

@@ -179,3 +179,22 @@ export async function addFinalVideo(db, ws, { tmpPath, mime, name, label, dataDi
   db.insert('media', { id: mid, workspace_id: ws.id, name: String(name || 'video').slice(0, 120), label: String(label || name || '').slice(0, 160), mime: outMime, bytes, data: Buffer.alloc(0), path: finalPath, kind: 'final', duration, poster, width, height, created_at: nowIso() });
   return { id: mid, name, label, mime: outMime, bytes, kind: 'final', duration, width, height, posterUrl: poster ? `/api/media/${mid}/poster` : null, url: `/api/media/${mid}` };
 }
+
+/** Replace a video's soundtrack: copy the picture, add the mixed audio (AAC). */
+export async function addMuxedVideo(db, ws, { videoMediaId, audioPath, label, dataDir }) {
+  const src = db.get(null, 'SELECT * FROM media WHERE id = ? AND workspace_id = ?', videoMediaId, ws.id);
+  if (!src?.path || !fs.existsSync(src.path)) throw new HttpError(404, 'Original video file not found');
+  const dir = path.join(dataDir, 'media');
+  fs.mkdirSync(dir, { recursive: true });
+  const mid = id('med');
+  const out = path.join(dir, `${mid}.mp4`);
+  await run('ffmpeg', ['-y', '-v', 'error', '-i', src.path, '-i', audioPath, '-map', '0:v:0', '-map', '1:a:0', '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-shortest', '-movflags', '+faststart', out]);
+  let poster = null;
+  if (src.poster && fs.existsSync(src.poster)) {
+    poster = path.join(dir, `${mid}-poster.jpg`);
+    fs.copyFileSync(src.poster, poster);
+  }
+  const bytes = fs.statSync(out).size;
+  db.insert('media', { id: mid, workspace_id: ws.id, name: `${src.name || 'video'} (with soundtrack)`.slice(0, 120), label: String(label || src.label || '').slice(0, 160), mime: 'video/mp4', bytes, data: Buffer.alloc(0), path: out, kind: 'final', duration: src.duration, poster, width: src.width, height: src.height, created_at: nowIso() });
+  return { id: mid, url: `/api/media/${mid}` };
+}
