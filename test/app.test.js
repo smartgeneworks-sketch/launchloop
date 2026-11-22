@@ -493,7 +493,7 @@ describe('soundtrack for uploaded / AI videos', () => {
   });
 });
 
-describe('browser sign-in', () => {
+describe('accounts: sign-up, sign-in, Google', () => {
   let srv;
   let base;
   before(async () => {
@@ -501,26 +501,104 @@ describe('browser sign-in', () => {
     base = `http://localhost:${srv.port}`;
   });
   after(() => srv.server.close());
+  const post = (url, body, cookie) => fetch(`${base}${url}`, { method: 'POST', headers: { 'content-type': 'application/json', ...(cookie ? { cookie } : {}) }, body: JSON.stringify(body) });
+  const sid = (r) => (r.headers.getSetCookie().find((c) => c.startsWith('ll_sid=')) || '').split(';')[0];
 
-  test('token is swapped for a year-long HttpOnly cookie that authorises the API; sign-out clears it', async () => {
+  test('sign-up needs the access code; the account then signs in and reaches the API', async () => {
     assert.equal((await fetch(`${base}/api/workspaces`)).status, 401);
-    assert.equal((await fetch(`${base}/api/session`, { method: 'POST', body: JSON.stringify({ token: 'wrong' }) })).status, 401);
-    const r = await fetch(`${base}/api/session`, { method: 'POST', body: JSON.stringify({ token: 'secret-token-123' }) });
-    const cookie = r.headers.get('set-cookie');
-    assert.match(cookie, /HttpOnly/);
-    assert.match(cookie, /Max-Age=31536000/);
-    const c = cookie.split(';')[0];
+    assert.equal((await post('/api/auth/signup', { name: 'Ama', email: 'ama@example.com', password: 'launch2026!' })).status, 403);
+    assert.equal((await post('/api/auth/signup', { name: 'Ama', email: 'ama@example.com', password: 'launch2026!', accessCode: 'nope' })).status, 403);
+    assert.equal((await post('/api/auth/signup', { name: 'Ama', email: 'ama@example.com', password: 'short', accessCode: 'secret-token-123' })).status, 400);
+    const r = await post('/api/auth/signup', { name: 'Ama', email: 'Ama@Example.com', password: 'launch2026!', accessCode: 'secret-token-123' });
+    assert.equal(r.status, 200);
+    const u = (await r.json()).user;
+    assert.equal(u.email, 'ama@example.com');
+    assert.equal(u.role, 'owner');
+    const setc = r.headers.getSetCookie().join('\n');
+    assert.match(setc, /HttpOnly/);
+    assert.match(setc, /Max-Age=31536000/);
+    const c = sid(r);
     assert.equal((await fetch(`${base}/api/workspaces`, { headers: { cookie: c } })).status, 200);
-    assert.equal((await (await fetch(`${base}/api/session`, { headers: { cookie: c } })).json()).signedIn, true);
-    assert.equal((await fetch(`${base}/api/workspaces`, { headers: { authorization: 'Bearer secret-token-123' } })).status, 200);
-    assert.match((await fetch(`${base}/api/session`, { method: 'DELETE' })).headers.get('set-cookie'), /Max-Age=0/);
+    const s = await (await fetch(`${base}/api/session`, { headers: { cookie: c } })).json();
+    assert.equal(s.user.name, 'Ama');
+    assert.equal((await post('/api/auth/signup', { name: 'X', email: 'ama@example.com', password: 'launch2026!', accessCode: 'secret-token-123' })).status, 409);
+
+    assert.equal((await post('/api/auth/signin', { email: 'ama@example.com', password: 'wrong-pass1' })).status, 401);
+    const r2 = await post('/api/auth/signin', { email: 'ama@example.com', password: 'launch2026!' });
+    assert.equal(r2.status, 200);
+    const c2 = sid(r2);
+    assert.equal((await post('/api/auth/signout', {}, c2)).status, 200);
+    assert.equal((await fetch(`${base}/api/workspaces`, { headers: { cookie: c2 } })).status, 401, 'signed-out session no longer works');
+    assert.equal((await fetch(`${base}/api/workspaces`, { headers: { cookie: c } })).status, 200, 'other sessions stay signed in');
+    assert.equal((await fetch(`${base}/api/workspaces`, { headers: { authorization: 'Bearer secret-token-123' } })).status, 200, 'scripts can still use the token');
+    assert.equal((await fetch(`${base}/api/workspaces`, { headers: { cookie: 'll_session=secret-token-123' } })).status, 401, 'old token cookie no longer signs in');
   });
 
-  test('www address redirects to the main address', async () => {
+  test('password reset with the access code signs out other sessions', async () => {
+    const r = await post('/api/auth/signup', { name: 'Kofi', email: 'kofi@example.com', password: 'first-pass1', accessCode: 'secret-token-123' });
+    const old = sid(r);
+    assert.equal((await post('/api/auth/reset-with-code', { email: 'kofi@example.com', accessCode: 'bad', password: 'second-pass2' })).status, 403);
+    const r2 = await post('/api/auth/reset-with-code', { email: 'kofi@example.com', accessCode: 'secret-token-123', password: 'second-pass2' });
+    assert.equal(r2.status, 200);
+    assert.equal((await fetch(`${base}/api/workspaces`, { headers: { cookie: old } })).status, 401);
+    assert.equal((await post('/api/auth/signin', { email: 'kofi@example.com', password: 'second-pass2' })).status, 200);
+  });
+
+  test('sign-in pages are served and www redirects to the main address', async () => {
+    for (const pth of ['/signin', '/signup', '/forgot-password', '/reset-password']) assert.match(await (await fetch(`${base}${pth}`)).text(), /auth\.js/);
+    const cfg = await (await fetch(`${base}/api/auth/config`)).json();
+    assert.equal(cfg.signupNeedsCode, true);
+    assert.equal((await fetch(`${base}/api/auth/google/start?mode=signin`, { redirect: 'manual' })).headers.get('location'), '/signin?error=google_not_configured');
     const http = await import('node:http');
     const r = await new Promise((ok, no) => http.get({ port: srv.port, path: '/studio', headers: { host: 'www.applaunchloop.com' } }, ok).on('error', no));
     r.resume();
     assert.equal(r.statusCode, 301);
     assert.equal(r.headers.location, 'https://applaunchloop.com/studio');
+  });
+
+  test('Google sign-in: new user needs the access code, then signs in; claims are checked', async () => {
+    const { Auth } = await import('../src/services/auth.js');
+    const db = openDb(':memory:');
+    let claims;
+    const auth = new Auth({
+      db,
+      config: { appApiToken: 'tok', env: { GOOGLE_CLIENT_ID: 'cid.apps.googleusercontent.com', GOOGLE_CLIENT_SECRET: 'sec' } },
+      fetchImpl: async (url, o) => {
+        assert.equal(url, 'https://oauth2.googleapis.com/token');
+        assert.match(String(o.body), /client_secret=sec/);
+        return new Response(JSON.stringify({ id_token: `h.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.s` }));
+      },
+    });
+    const fakeRes = () => {
+      const h = {};
+      return { h, getHeader: (k) => h[k], setHeader: (k, v) => (h[k] = v) };
+    };
+    const reqWith = (cookies) => ({ headers: { host: 'applaunchloop.com', 'x-forwarded-proto': 'https', cookie: cookies }, socket: {} });
+    const cookiesOf = (res) => [].concat(res.h['set-cookie'] || []).map((c) => c.split(';')[0]).join('; ');
+    const flow = async (pre = '') => {
+      const res1 = fakeRes();
+      const url = new URL(auth.googleStartUrl(reqWith(pre), res1, { next: '/#/studio', mode: 'signup' }));
+      assert.equal(url.searchParams.get('redirect_uri'), 'https://applaunchloop.com/api/auth/google/callback');
+      claims = { iss: 'https://accounts.google.com', aud: 'cid.apps.googleusercontent.com', exp: Date.now() / 1000 + 600, nonce: url.searchParams.get('nonce'), sub: 'g-1', email: 'Esi@Gmail.com', email_verified: true, name: 'Esi M', picture: 'https://x/p.jpg' };
+      const res2 = fakeRes();
+      const out = await auth.googleCallback(reqWith(cookiesOf(res1)), res2, { code: 'c', state: url.searchParams.get('state') });
+      return { out, res2 };
+    };
+    let { out } = await flow();
+    assert.match(out.redirect, /^\/signup\?error=needs_code&email=esi%40gmail.com/);
+    const prep = fakeRes();
+    auth.googlePrepare(reqWith(''), prep, { accessCode: 'tok' });
+    ({ out } = await flow(cookiesOf(prep)));
+    assert.equal(out.redirect, '/#/studio');
+    const u = db.get(null, 'SELECT * FROM users WHERE email = ?', 'esi@gmail.com');
+    assert.equal(u.google_sub, 'g-1');
+    assert.equal(u.role, 'owner');
+    ({ out } = await flow()); // returning user: no code needed
+    assert.equal(out.redirect, '/#/studio');
+    // a tampered state is rejected
+    const res1 = fakeRes();
+    auth.googleStartUrl(reqWith(''), res1, { next: '/' });
+    assert.match((await auth.googleCallback(reqWith(cookiesOf(res1)), fakeRes(), { code: 'c', state: 'forged' })).redirect, /google_expired/);
+    assert.throws(() => auth.googlePrepare(reqWith(''), fakeRes(), { accessCode: 'wrong' }), /not right/);
   });
 });

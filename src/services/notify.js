@@ -85,14 +85,14 @@ export class Notifier {
   }
 
   // ---------------------------------------------------------------- transports
-  async sendEmail(to, { subject, title, lines = [], link, linkLabel = 'Open LaunchLoop' }) {
+  async sendEmail(to, { subject, title, lines = [], link, linkLabel = 'Open LaunchLoop', footer = 'You get this because reminders are on for this workspace. Change them in LaunchLoop → Product source → Reminders.' }) {
     if (!this.providers().email.configured) throw new Error('Email not configured (RESEND_API_KEY / NOTIFY_EMAIL_FROM)');
     const html = `<div style="font-family:Inter,Arial,sans-serif;max-width:560px;margin:auto;color:#121212">
       <div style="font-size:13px;color:#57739e;font-weight:600;letter-spacing:.06em;text-transform:uppercase">LaunchLoop</div>
       <h2 style="font-size:20px;margin:6px 0 12px">${esc(title)}</h2>
       ${lines.map((l) => `<p style="margin:0 0 8px;font-size:14px;line-height:1.5;color:#333">${esc(l)}</p>`).join('')}
       ${link ? `<p style="margin:18px 0"><a href="${esc(link)}" style="background:#57739e;color:#fff;text-decoration:none;padding:10px 18px;border-radius:999px;font-weight:600;font-size:14px">${esc(linkLabel)}</a></p>` : ''}
-      <p style="font-size:12px;color:#888;margin-top:24px">You get this because reminders are on for this workspace. Change them in LaunchLoop → Product source → Reminders.</p></div>`;
+      <p style="font-size:12px;color:#888;margin-top:24px">${esc(footer)}</p></div>`;
     const res = await this.fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: { authorization: `Bearer ${this.env.RESEND_API_KEY}`, 'content-type': 'application/json' },

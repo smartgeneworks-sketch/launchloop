@@ -11,6 +11,7 @@ import { openDb } from './db.js';
 import { CHANNELS, FORMATS, TASK_CATEGORIES } from './lib/channels.js';
 import { loadEnv } from './lib/env.js';
 import { HttpError, timingSafeEqualStr } from './lib/util.js';
+import { Auth } from './services/auth.js';
 import { AIService } from './services/ai.js';
 import * as core from './services/core.js';
 import { buildRenderJob, renderAssetSvg } from './services/media.js';
@@ -32,7 +33,7 @@ const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.json': 'application/json' };
 const MAX_BODY = 6 * 1024 * 1024;
 
-export function createApp({ db, ai, config, publisher, worker, tts = new TTSService(config.env, { dataDir: config.dataDir }), fonts = new FontService({ dataDir: config.dataDir }), notifier = new Notifier({ db, config }), videogen = new VideoGen({ db, config }) }) {
+export function createApp({ db, ai, config, publisher, worker, tts = new TTSService(config.env, { dataDir: config.dataDir }), fonts = new FontService({ dataDir: config.dataDir }), notifier = new Notifier({ db, config }), videogen = new VideoGen({ db, config }), auth = new Auth({ db, config, notifier }) }) {
   const ctx = { db, ai, config };
   const routes = [];
   const on = (method, pattern, handler, opts = {}) => {
@@ -47,27 +48,29 @@ export function createApp({ db, ai, config, publisher, worker, tts = new TTSServ
   const withAllowed = (a) => a && { ...a, allowed_next: allowedNext(a.state) };
 
   // ---------------------------------------------------------------- meta
-  // sign-in: swaps the API token for an HttpOnly cookie so the browser stays signed in
-  const sessionCookie = (req, value, maxAge) => {
-    const secure = req.headers['x-forwarded-proto'] === 'https' || req.socket?.encrypted ? '; Secure' : '';
-    return `ll_session=${encodeURIComponent(value)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secure}`;
-  };
-  on('POST', '/api/session', ({ req, res, body }) => {
-    if (!config.appApiToken) return { ok: true, authRequired: false };
-    const tok = String(body.token || '').trim();
-    if (!timingSafeEqualStr(tok, config.appApiToken)) throw new HttpError(401, 'That token is not right — copy APP_API_TOKEN from Render → Environment');
-    res.setHeader('set-cookie', sessionCookie(req, tok, body.remember === false ? 60 * 60 * 12 : 60 * 60 * 24 * 365));
-    return { ok: true };
-  }, { public: true });
+  // ---------------------------------------------------------------- accounts (see services/auth.js)
+    on('GET', '/api/auth/config', () => auth.publicConfig(), { public: true });
   on('GET', '/api/session', ({ req }) => {
-    if (!config.appApiToken) return { signedIn: true, authRequired: false };
-    const tok = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '') || readCookie(req, 'll_session');
-    return { signedIn: timingSafeEqualStr(tok, config.appApiToken), authRequired: true };
+    const user = auth.userFromRequest(req);
+    return { authRequired: auth.required, signedIn: !auth.required || !!user, user: auth.publicUser(user) };
   }, { public: true });
-  on('DELETE', '/api/session', ({ req, res }) => {
-    res.setHeader('set-cookie', sessionCookie(req, '', 0));
-    return { ok: true };
-  }, { public: true });
+  on('POST', '/api/auth/signup', ({ req, res, body }) => ({ user: auth.signup(req, res, body) }), { public: true });
+  on('POST', '/api/auth/signin', ({ req, res, body }) => ({ user: auth.signin(req, res, body) }), { public: true });
+  on('POST', '/api/auth/signout', ({ req, res }) => (auth.signOut(req, res), { ok: true }), { public: true });
+  on('POST', '/api/auth/forgot', ({ req, body }) => auth.forgot(req, body), { public: true });
+  on('POST', '/api/auth/reset', ({ req, res, body }) => ({ user: auth.reset(req, res, body) }), { public: true });
+  on('POST', '/api/auth/reset-with-code', ({ req, res, body }) => ({ user: auth.resetWithCode(req, res, body) }), { public: true });
+  on('POST', '/api/auth/google/prepare', ({ req, res, body }) => auth.googlePrepare(req, res, body), { public: true });
+  on('GET', '/api/auth/google/start', ({ req, res, q }) => {
+    const url = auth.googleStartUrl(req, res, q);
+    res.writeHead(302, { location: url || `/${q.mode === 'signup' ? 'signup' : 'signin'}?error=google_not_configured` });
+    res.end();
+  }, { raw: true, public: true });
+  on('GET', '/api/auth/google/callback', async ({ req, res, q }) => {
+    const { redirect } = await auth.googleCallback(req, res, q);
+    res.writeHead(302, { location: redirect });
+    res.end();
+  }, { raw: true, public: true });
 
   on('GET', '/api/health', () => ({ ok: true, ai: ai.info(), publishMode: publisher.mode, worker: { intervalMs: config.workerIntervalMs, ...worker?.state }, authRequired: !!config.appApiToken, tts: { available: tts.info().available, model: tts.info().model, lastError: tts.lastError } }), { public: true });
   on('GET', '/api/config', () => ({ channels: CHANNELS, formats: FORMATS, states: STATES, taskCategories: TASK_CATEGORIES, publicBaseUrl: config.publicBaseUrl, fonts: FONTS, pairings: PAIRINGS }));
@@ -394,7 +397,8 @@ export function createApp({ db, ai, config, publisher, worker, tts = new TTSServ
   }
 
   function serveStatic(req, res, pathname) {
-    const rel = pathname === '/' ? 'index.html' : pathname.replace(/^\/+/, '');
+    const AUTH_PAGES = ['/signin', '/signup', '/forgot-password', '/reset-password'];
+    const rel = pathname === '/' ? 'index.html' : AUTH_PAGES.includes(pathname.replace(/\/$/, '')) ? 'auth.html' : pathname.replace(/^\/+/, '');
     const file = path.normalize(path.join(PUBLIC_DIR, rel));
     if (!file.startsWith(PUBLIC_DIR)) return send(res, 403, { error: 'Forbidden' });
     const target = fs.existsSync(file) && fs.statSync(file).isFile() ? file : path.join(PUBLIC_DIR, 'index.html');
@@ -422,8 +426,9 @@ export function createApp({ db, ai, config, publisher, worker, tts = new TTSServ
       const route = routes.find((r) => r.method === req.method && r.re.test(pathname));
       if (!route) throw new HttpError(404, `No route for ${req.method} ${pathname}`);
       if (config.appApiToken && !route.public) {
-        const tok = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '') || readCookie(req, 'll_session');
-        if (!timingSafeEqualStr(tok, config.appApiToken)) throw new HttpError(401, 'Missing or invalid API token');
+        const bearer = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+        const ok = bearer ? timingSafeEqualStr(bearer, config.appApiToken) : !!(req.user = auth.userFromRequest(req));
+        if (!ok) throw new HttpError(401, bearer ? 'Invalid API token' : 'Please sign in');
       }
       const m = pathname.match(route.re);
       const p = Object.fromEntries(route.keys.map((k, i) => [k, decodeURIComponent(m[i + 1])]));
@@ -445,11 +450,6 @@ export function createApp({ db, ai, config, publisher, worker, tts = new TTSServ
       send(res, status, { error: e.message, ...(e.details ? { details: e.details } : {}) });
     }
   };
-}
-
-function readCookie(req, name) {
-  const m = String(req.headers.cookie || '').match(new RegExp(`(?:^|;\\s*)${name}=([^;]*)`));
-  return m ? decodeURIComponent(m[1]) : '';
 }
 
 export async function start(overrides = {}) {

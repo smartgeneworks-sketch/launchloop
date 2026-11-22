@@ -331,10 +331,10 @@ html[data-theme='nuance'] .brand .logo-on-dark { display: none; }
 
 .media-item .btn.xs { justify-self: start; }
 
-/* sign-in */
-.signin-screen{position:fixed;inset:0;z-index:1000;display:grid;place-items:center;background:var(--paper);padding:20px}
-.signin-card{width:min(400px,100%);background:var(--card);color:var(--ink);border:1px solid var(--line);border-radius:16px;padding:28px;box-shadow:0 20px 60px rgba(0,0,0,.25)}
-.signin-card input[type=password]{width:100%;padding:11px 12px;border-radius:10px;border:1px solid var(--line);font:inherit;background:var(--card);color:inherit}
-.signin-logo{height:34px;width:auto;align-self:flex-start}
-.signin-err{color:var(--bad);min-height:1em}
 .top-right{display:flex;gap:8px;align-items:center}
+.me{display:grid;grid-template-columns:30px 1fr auto;gap:9px;align-items:center;padding:8px 0 4px;border-top:1px solid var(--line-2);margin-top:4px}
+.me img,.me-init{width:30px;height:30px;border-radius:50%;object-fit:cover}
+.me-init{display:grid;place-items:center;background:var(--signal);color:#fff;font-weight:700;font-size:13px}
+.me-txt{min-width:0;display:grid;line-height:1.25}
+.me-txt b{font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.me-txt span{font-size:11.5px;color:var(--ink-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

@@ -24,7 +24,7 @@ Any channel without credentials automatically creates a Share Kit task. Nothing 
    - `PUBLIC_BASE_URL`: your Render URL, e.g. `https://launchloop.onrender.com`
    - `GEMINI_API_KEY` **or** `OPENAI_API_KEY`
    - X and/or LinkedIn tokens (optional; leave them blank to use the Share Kit)
-4. Deploy. Open the URL and sign in with `APP_API_TOKEN` (copy it from Render → Environment). The browser stays signed in for a year (a secure, HttpOnly cookie), and `www.` addresses redirect to the main address so you only sign in once. Then create your workspace and import your site.
+4. Deploy. Open the URL, click **Create an account**, and enter `APP_API_TOKEN` (copy it from Render → Environment) as the **team access code**. The first account becomes the owner. Then create your workspace and import your site.
 
 ## Option B: Fly.io
 
@@ -69,3 +69,20 @@ Everything lives in `/data/launchloop.db`. Snapshot the disk (Render and Fly bot
 1. **Server-side PNG/JPEG rendering.** Instagram and Facebook won't accept SVG. Add `sharp` (or `@resvg/resvg-js`) and expose `/api/assets/:id/media.jpg`.
 2. **MP4 rendering** of the render job, with Remotion or FFmpeg, for Reels, Shorts and TikTok.
 3. **Adapters** in `src/services/publisher.js` for the Instagram Graph API (container → publish), Facebook Pages, the YouTube Data API and the TikTok Content Posting API, each behind its platform's app review.
+
+
+## Accounts and Google sign-in
+
+- People sign up at `/signup` with name, email and password, or with Google. Sessions last a year (HttpOnly, Secure cookie); `www.` redirects to the main address.
+- **Who can sign up:** anyone who has the team access code (`APP_API_TOKEN`), or whose email matches `SIGNUP_ALLOWED_EMAILS` (`you@company.com` or a whole domain like `@company.com`). Give teammates the code, or add their domain.
+- **Forgot password:** with email set up (`RESEND_API_KEY`, `NOTIFY_EMAIL_FROM`) a one-hour reset link is emailed. Without it, the reset page asks for the access code instead.
+- `APP_API_TOKEN` still works as `Authorization: Bearer …` for scripts.
+
+### Turn on "Continue with Google"
+
+1. Go to https://console.cloud.google.com/ and create (or pick) a project.
+2. **APIs & Services → OAuth consent screen** (Google Auth Platform → Branding): app name *LaunchLoop*, your support email, authorised domain `applaunchloop.com`. Audience: **External**, then **Publish app** so any Google account can sign in.
+3. **Clients → Create client → Web application.**
+   - Authorised JavaScript origins: `https://applaunchloop.com`
+   - Authorised redirect URIs: `https://applaunchloop.com/api/auth/google/callback`
+4. Copy the **Client ID** and **Client secret** into Render → Environment as `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`, then save (Render redeploys).

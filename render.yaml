@@ -16,7 +16,11 @@ services:
       - key: DATA_DIR
         value: /data
       - key: APP_API_TOKEN
-        generateValue: true          # copy it from the Render dashboard; the app asks for it on first visit
+        generateValue: true          # team access code: needed to create an account; also a Bearer token for scripts
+      - key: GOOGLE_CLIENT_ID         # "Continue with Google" — see GO-LIVE.md → Accounts
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
       - key: PUBLIC_BASE_URL
         sync: false                  # e.g. https://launchloop.onrender.com
       - key: AI_PROVIDER
