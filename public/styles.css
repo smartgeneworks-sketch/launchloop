@@ -337,3 +337,4 @@ html[data-theme='nuance'] .brand .logo-on-dark { display: none; }
 .signin-card input[type=password]{width:100%;padding:11px 12px;border-radius:10px;border:1px solid var(--line);font:inherit;background:var(--card);color:inherit}
 .signin-logo{height:34px;width:auto;align-self:flex-start}
 .signin-err{color:var(--bad);min-height:1em}
+.top-right{display:flex;gap:8px;align-items:center}

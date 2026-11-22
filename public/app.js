@@ -216,6 +216,8 @@ async function refreshHealth() {
 }
 function renderModes() {
   const h = S.health;
+  const top = $('#signOutTop');
+  if (top) top.hidden = !h.authRequired;
   const err = h.ai.lastError;
   $('#modes').innerHTML = `
     <div class="mode-pill"><span><span class="dot ${err ? 'bad' : h.ai.provider !== 'mock' ? 'live' : ''}"></span>AI</span><b>${esc(h.ai.provider)}${h.ai.model ? ' · ' + esc(h.ai.model) : ''}</b></div>
