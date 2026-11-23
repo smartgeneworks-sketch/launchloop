@@ -52,8 +52,16 @@ export function createApp({ db, ai, config, publisher, worker, tts = new TTSServ
     on('GET', '/api/auth/config', () => auth.publicConfig(), { public: true });
   on('GET', '/api/session', ({ req }) => {
     const user = auth.userFromRequest(req);
-    return { authRequired: auth.required, signedIn: !auth.required || !!user, user: auth.publicUser(user) };
+    const admin = !auth.required || ['owner', 'admin'].includes(user?.role);
+    return { authRequired: auth.required, signedIn: !auth.required || !!user, user: auth.publicUser(user), isAdmin: admin, pendingCount: admin ? auth.pendingCount() : 0 };
   }, { public: true });
+  // admin portal — owners and admins (the API token counts as an owner)
+  const mustAdmin = (req) => {
+    if (auth.required && req.user && !['owner', 'admin'].includes(req.user.role)) throw new HttpError(403, 'Only admins can manage the team');
+    return req.user || null;
+  };
+  on('GET', '/api/admin/users', ({ req }) => (mustAdmin(req), { users: auth.listUsers(), me: req.user?.id || null, myRole: req.user?.role || 'owner' }));
+  on('POST', '/api/admin/users/:id', ({ req, p, body }) => auth.adminUpdate(mustAdmin(req), p.id, body, req));
   on('POST', '/api/auth/signup', ({ req, res, body }) => ({ user: auth.signup(req, res, body) }), { public: true });
   on('POST', '/api/auth/signin', ({ req, res, body }) => ({ user: auth.signin(req, res, body) }), { public: true });
   on('POST', '/api/auth/signout', ({ req, res }) => (auth.signOut(req, res), { ok: true }), { public: true });

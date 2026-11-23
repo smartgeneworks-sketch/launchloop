@@ -534,6 +534,41 @@ describe('accounts: sign-up, sign-in, Google', () => {
     assert.equal((await fetch(`${base}/api/workspaces`, { headers: { cookie: 'll_session=secret-token-123' } })).status, 401, 'old token cookie no longer signs in');
   });
 
+  test('later sign-ups wait for approval in the Team page; admins approve, switch off and change roles', async () => {
+    const owner = sid(await post('/api/auth/signin', { email: 'ama@example.com', password: 'launch2026!' }));
+    const cfg = await (await fetch(`${base}/api/auth/config`)).json();
+    assert.equal(cfg.signupNeedsCode, false);
+    assert.equal(cfg.approvalRequired, true);
+    const r = await post('/api/auth/signup', { name: 'Yaw', email: 'yaw@example.com', password: 'yaw-pass-1' });
+    assert.equal(r.status, 200);
+    assert.equal((await r.json()).user.pending, true);
+    assert.equal(sid(r), '', 'no session until approved');
+    const s1 = await post('/api/auth/signin', { email: 'yaw@example.com', password: 'yaw-pass-1' });
+    assert.equal(s1.status, 403);
+    assert.match((await s1.json()).error, /waiting for an admin/);
+    const sess = await (await fetch(`${base}/api/session`, { headers: { cookie: owner } })).json();
+    assert.equal(sess.isAdmin, true);
+    assert.equal(sess.pendingCount, 1);
+    const { users } = await (await fetch(`${base}/api/admin/users`, { headers: { cookie: owner } })).json();
+    const yaw = users.find((u) => u.email === 'yaw@example.com');
+    assert.equal(yaw.status, 'pending');
+    assert.equal(users[0].email, 'yaw@example.com', 'pending people are listed first');
+    assert.equal((await (await post(`/api/admin/users/${yaw.id}`, { action: 'approve' }, owner)).json()).status, 'active');
+    const yawSid = sid(await post('/api/auth/signin', { email: 'yaw@example.com', password: 'yaw-pass-1' }));
+    assert.ok(yawSid);
+    assert.equal((await fetch(`${base}/api/workspaces`, { headers: { cookie: yawSid } })).status, 200);
+    assert.equal((await fetch(`${base}/api/admin/users`, { headers: { cookie: yawSid } })).status, 403, 'members cannot manage the team');
+    const me = users.find((u) => u.email === 'ama@example.com');
+    assert.equal((await post(`/api/admin/users/${me.id}`, { action: 'disable' }, owner)).status, 400, 'cannot switch yourself off');
+    assert.equal((await post(`/api/admin/users/${me.id}`, { action: 'disable' }, yawSid)).status, 403);
+    await post(`/api/admin/users/${yaw.id}`, { action: 'role', role: 'admin' }, owner);
+    assert.equal((await fetch(`${base}/api/admin/users`, { headers: { cookie: yawSid } })).status, 200, 'admin can open the Team page');
+    assert.equal((await post(`/api/admin/users/${me.id}`, { action: 'disable' }, yawSid)).status, 403, 'admins cannot touch owners');
+    assert.equal((await post(`/api/admin/users/${yaw.id}`, { action: 'disable' }, owner)).status, 200);
+    assert.equal((await fetch(`${base}/api/workspaces`, { headers: { cookie: yawSid } })).status, 401, 'switched-off user is signed out');
+    assert.equal((await post('/api/auth/signin', { email: 'yaw@example.com', password: 'yaw-pass-1' })).status, 403);
+  });
+
   test('password reset with the access code signs out other sessions', async () => {
     const r = await post('/api/auth/signup', { name: 'Kofi', email: 'kofi@example.com', password: 'first-pass1', accessCode: 'secret-token-123' });
     const old = sid(r);
@@ -547,7 +582,7 @@ describe('accounts: sign-up, sign-in, Google', () => {
   test('sign-in pages are served and www redirects to the main address', async () => {
     for (const pth of ['/signin', '/signup', '/forgot-password', '/reset-password']) assert.match(await (await fetch(`${base}${pth}`)).text(), /auth\.js/);
     const cfg = await (await fetch(`${base}/api/auth/config`)).json();
-    assert.equal(cfg.signupNeedsCode, true);
+    assert.equal(cfg.signupNeedsCode, false, 'only the very first (owner) account needs the code');
     assert.equal((await fetch(`${base}/api/auth/google/start?mode=signin`, { redirect: 'manual' })).headers.get('location'), '/signin?error=google_not_configured');
     const http = await import('node:http');
     const r = await new Promise((ok, no) => http.get({ port: srv.port, path: '/studio', headers: { host: 'www.applaunchloop.com' } }, ok).on('error', no));
@@ -595,10 +630,31 @@ describe('accounts: sign-up, sign-in, Google', () => {
     assert.equal(u.role, 'owner');
     ({ out } = await flow()); // returning user: no code needed
     assert.equal(out.redirect, '/#/studio');
+    // a second, new Google user waits for approval
+    const res3 = fakeRes();
+    const url3 = new URL(auth.googleStartUrl(reqWith(''), res3, { next: '/', mode: 'signup' }));
+    claims = { ...claims, sub: 'g-2', email: 'kwame@gmail.com', nonce: url3.searchParams.get('nonce') };
+    const out3 = await auth.googleCallback(reqWith(cookiesOf(res3)), fakeRes(), { code: 'c', state: url3.searchParams.get('state') });
+    assert.equal(out3.redirect, '/signin?pending=1&email=kwame%40gmail.com');
+    assert.equal(db.get(null, 'SELECT status FROM users WHERE email = ?', 'kwame@gmail.com').status, 'pending');
     // a tampered state is rejected
     const res1 = fakeRes();
     auth.googleStartUrl(reqWith(''), res1, { next: '/' });
     assert.match((await auth.googleCallback(reqWith(cookiesOf(res1)), fakeRes(), { code: 'c', state: 'forged' })).redirect, /google_expired/);
     assert.throws(() => auth.googlePrepare(reqWith(''), fakeRes(), { accessCode: 'wrong' }), /not right/);
   });
+});
+
+test('accounts table from the first release is upgraded in place', async () => {
+  const { Auth } = await import('../src/services/auth.js');
+  const db = openDb(':memory:');
+  db.raw.exec(`CREATE TABLE users (id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE, name TEXT, password_hash TEXT, google_sub TEXT UNIQUE, avatar TEXT, role TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('owner','member')), created_at TEXT NOT NULL, last_login_at TEXT);
+    CREATE TABLE sessions (id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, created_at TEXT NOT NULL, expires_at TEXT NOT NULL, user_agent TEXT);`);
+  db.raw.exec(`INSERT INTO users (id, email, role, created_at) VALUES ('usr_1', 'o@x.com', 'owner', '2026-11-22'); INSERT INTO sessions VALUES ('s1', 'usr_1', '2026-11-22', '2099-01-01', '')`);
+  new Auth({ db, config: { appApiToken: 't', env: {} } });
+  const u = db.get(null, 'SELECT * FROM users WHERE id = ?', 'usr_1');
+  assert.equal(u.status, 'active');
+  db.run("UPDATE users SET role = 'admin' WHERE id = 'usr_1'");
+  db.run("DELETE FROM users WHERE id = 'usr_1'");
+  assert.equal(db.scalar('SELECT COUNT(*) FROM sessions'), 0, 'sessions still cascade after the rebuild');
 });

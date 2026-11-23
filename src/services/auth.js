@@ -19,9 +19,12 @@ CREATE TABLE IF NOT EXISTS users (
   password_hash TEXT,
   google_sub TEXT UNIQUE,
   avatar TEXT,
-  role TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('owner','member')),
+  role TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('owner','admin','member')),
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','pending','disabled')),
   created_at TEXT NOT NULL,
-  last_login_at TEXT
+  last_login_at TEXT,
+  approved_by TEXT,
+  approved_at TEXT
 );
 CREATE TABLE IF NOT EXISTS sessions (
   id TEXT PRIMARY KEY,
@@ -55,9 +58,31 @@ export class Auth {
     this.env = config.env || {};
     this.notifier = notifier;
     this.fetch = fetchImpl;
+    this.migrate();
     db.raw.exec(AUTH_SCHEMA);
     this.secret = crypto.createHash('sha256').update(`launchloop-auth:${this.env.AUTH_SECRET || config.appApiToken || crypto.randomBytes(32).toString('hex')}`).digest();
     this.hits = new Map();
+  }
+
+  /** v1 users table had roles owner/member and no status — rebuild it (SQLite can't alter a CHECK). */
+  migrate() {
+    const sql = this.db.raw.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'users'").get()?.sql;
+    if (!sql || sql.includes("'admin'")) return;
+    const raw = this.db.raw;
+    raw.exec('PRAGMA foreign_keys = OFF;');
+    try {
+      raw.exec('BEGIN');
+      raw.exec(AUTH_SCHEMA.replace('CREATE TABLE IF NOT EXISTS users (', 'CREATE TABLE users_v2 ('));
+      raw.exec("INSERT INTO users_v2 (id, email, name, password_hash, google_sub, avatar, role, status, created_at, last_login_at) SELECT id, email, name, password_hash, google_sub, avatar, role, 'active', created_at, last_login_at FROM users");
+      raw.exec('DROP TABLE users');
+      raw.exec('ALTER TABLE users_v2 RENAME TO users');
+      raw.exec('COMMIT');
+    } catch (e) {
+      raw.exec('ROLLBACK');
+      throw e;
+    } finally {
+      raw.exec('PRAGMA foreign_keys = ON;');
+    }
   }
 
   // ------------------------------------------------------------ policy
@@ -71,7 +96,9 @@ export class Auth {
     return !!this.notifier?.providers?.().email.configured;
   }
   publicConfig() {
-    return { authRequired: this.required, google: this.google, emailReset: this.emailReset, signupNeedsCode: this.required, hasUsers: !!this.db.scalar('SELECT COUNT(*) FROM users') };
+    const hasUsers = !!this.db.scalar('SELECT COUNT(*) FROM users');
+    // The very first account (the owner) needs the access code; after that, new accounts wait for an admin's approval.
+    return { authRequired: this.required, google: this.google, emailReset: this.emailReset, signupNeedsCode: this.required && !hasUsers, approvalRequired: this.required && hasUsers, hasUsers };
   }
   codeOk(code) {
     return !this.required || (!!code && timingSafeEqualStr(String(code).trim(), this.config.appApiToken));
@@ -116,13 +143,67 @@ export class Auth {
 
   // ------------------------------------------------------------ users & sessions
   publicUser(u) {
-    return u && { id: u.id, email: u.email, name: u.name || u.email.split('@')[0], role: u.role, avatar: u.avatar || null, google: !!u.google_sub, password: !!u.password_hash };
+    return u && { id: u.id, email: u.email, name: u.name || u.email.split('@')[0], role: u.role, status: u.status, avatar: u.avatar || null, google: !!u.google_sub, password: !!u.password_hash, createdAt: u.created_at, lastLoginAt: u.last_login_at || null, approvedAt: u.approved_at || null };
   }
-  createUser({ email, name, password, googleSub, avatar }) {
-    const role = this.db.scalar('SELECT COUNT(*) FROM users') ? 'member' : 'owner';
+  createUser({ email, name, password, googleSub, avatar, status = 'active' }) {
+    const first = !this.db.scalar('SELECT COUNT(*) FROM users');
     const uid = id('usr');
-    this.db.run('INSERT INTO users (id, email, name, password_hash, google_sub, avatar, role, created_at) VALUES (?,?,?,?,?,?,?,?)', uid, email, name || null, password ? this.hashPassword(password) : null, googleSub || null, avatar || null, role, nowIso());
-    return this.db.get(null, 'SELECT * FROM users WHERE id = ?', uid);
+    this.db.run('INSERT INTO users (id, email, name, password_hash, google_sub, avatar, role, status, created_at) VALUES (?,?,?,?,?,?,?,?,?)', uid, email, name || null, password ? this.hashPassword(password) : null, googleSub || null, avatar || null, first ? 'owner' : 'member', first ? 'active' : status, nowIso());
+    const user = this.db.get(null, 'SELECT * FROM users WHERE id = ?', uid);
+    if (user.status === 'pending') this.notifyAdmins(user).catch((e) => console.error('[auth] new-signup email failed:', e.message));
+    return user;
+  }
+  /** Who gets in straight away: the first account, anyone with the access code, or an allow-listed email. */
+  instantAccess(email, codeOk) {
+    return !this.required || codeOk || this.emailAllowlisted(email) || !this.db.scalar('SELECT COUNT(*) FROM users');
+  }
+  statusError(user) {
+    if (user.status === 'pending') return new HttpError(403, 'Your account is waiting for an admin to approve it. You’ll be able to sign in once it’s approved.');
+    if (user.status === 'disabled') return new HttpError(403, 'This account has been switched off. Ask your LaunchLoop admin if you think this is a mistake.');
+    return null;
+  }
+  async notifyAdmins(user) {
+    if (!this.emailReset) return;
+    const admins = this.db.all(null, "SELECT email FROM users WHERE role IN ('owner','admin') AND status = 'active'");
+    const link = `${String(this.config.publicBaseUrl || '').replace(/\/$/, '')}/#/team`;
+    for (const a of admins)
+      await this.notifier.sendEmail(a.email, { subject: `New LaunchLoop sign-up: ${user.name || user.email}`, title: 'Someone is waiting for access', lines: [`${user.name || user.email} (${user.email}) created a LaunchLoop account and is waiting for approval.`, 'Approve or decline them on the Team page.'], link, linkLabel: 'Review sign-up', footer: 'You get this because you are an admin of this LaunchLoop.' });
+  }
+
+  // ------------------------------------------------------------ admin portal
+  listUsers() {
+    return this.db.all(null, "SELECT * FROM users ORDER BY CASE status WHEN 'pending' THEN 0 WHEN 'active' THEN 1 ELSE 2 END, created_at DESC").map((u) => this.publicUser(u));
+  }
+  pendingCount() {
+    return this.db.scalar("SELECT COUNT(*) FROM users WHERE status = 'pending'");
+  }
+  /** actor: the signed-in admin (null = API token, which acts as owner). */
+  adminUpdate(actor, userId, change, req) {
+    const target = this.db.get(null, 'SELECT * FROM users WHERE id = ?', userId);
+    if (!target) throw new HttpError(404, 'User not found');
+    const actorRole = actor ? actor.role : 'owner';
+    if (actor && actor.id === target.id) throw new HttpError(400, 'You can’t change your own access here');
+    if (target.role === 'owner' && actorRole !== 'owner') throw new HttpError(403, 'Only an owner can change another owner');
+    const owners = () => this.db.scalar("SELECT COUNT(*) FROM users WHERE role = 'owner' AND status = 'active'");
+    if (change.action === 'approve' || change.action === 'enable') {
+      this.db.run("UPDATE users SET status = 'active', approved_by = ?, approved_at = ? WHERE id = ?", actor?.id || 'api-token', nowIso(), userId);
+      if (target.status === 'pending' && this.emailReset)
+        this.notifier.sendEmail(target.email, { subject: 'You’re in — your LaunchLoop account is approved', title: 'Your account is approved', lines: [`Hi ${target.name || ''}, an admin approved your LaunchLoop account. You can sign in now.`], link: `${req ? baseUrlOf(req) : String(this.config.publicBaseUrl || '').replace(/\/$/, '')}/signin?email=${encodeURIComponent(target.email)}`, linkLabel: 'Sign in', footer: 'You get this because you signed up for LaunchLoop.' }).catch((e) => console.error('[auth] approval email failed:', e.message));
+    } else if (change.action === 'disable') {
+      if (target.role === 'owner' && owners() <= 1) throw new HttpError(400, 'There must always be at least one owner');
+      this.db.run("UPDATE users SET status = 'disabled' WHERE id = ?", userId);
+      this.db.run('DELETE FROM sessions WHERE user_id = ?', userId);
+    } else if (change.action === 'role') {
+      if (!['owner', 'admin', 'member'].includes(change.role)) throw new HttpError(400, 'Unknown role');
+      if (change.role === 'owner' && actorRole !== 'owner') throw new HttpError(403, 'Only an owner can make someone an owner');
+      if (target.role === 'owner' && change.role !== 'owner' && owners() <= 1) throw new HttpError(400, 'There must always be at least one owner');
+      this.db.run('UPDATE users SET role = ? WHERE id = ?', change.role, userId);
+    } else if (change.action === 'remove') {
+      if (target.role === 'owner' && owners() <= 1) throw new HttpError(400, 'There must always be at least one owner');
+      this.db.run('DELETE FROM users WHERE id = ?', userId);
+      return { removed: true };
+    } else throw new HttpError(400, 'Unknown action');
+    return this.publicUser(this.db.get(null, 'SELECT * FROM users WHERE id = ?', userId));
   }
   createSession(res, req, user, { remember = true } = {}) {
     const raw = b64url(crypto.randomBytes(32));
@@ -143,7 +224,7 @@ export class Auth {
   userFromRequest(req) {
     const raw = readCookie(req, 'll_sid');
     if (!raw) return null;
-    const row = this.db.get(null, 'SELECT u.* FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.id = ? AND s.expires_at > ?', sha256(raw), nowIso());
+    const row = this.db.get(null, "SELECT u.* FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.id = ? AND s.expires_at > ? AND u.status = 'active'", sha256(raw), nowIso());
     return row || null;
   }
   signOut(req, res) {
@@ -157,10 +238,13 @@ export class Auth {
     this.limit(`signup:${clientIp(req)}`, 10, 3600);
     email = Auth.normEmail(email);
     Auth.checkPassword(password);
-    if (!this.codeOk(accessCode) && !this.emailAllowlisted(email)) throw new HttpError(403, accessCode ? 'That access code is not right' : 'Enter your team access code to create an account');
+    const hasUsers = !!this.db.scalar('SELECT COUNT(*) FROM users');
+    if (accessCode && !this.codeOk(accessCode)) throw new HttpError(403, 'That access code is not right');
+    if (!hasUsers && this.required && !this.codeOk(accessCode) && !this.emailAllowlisted(email)) throw new HttpError(403, 'Enter the access code to create the owner account');
     const existing = this.db.get(null, 'SELECT * FROM users WHERE email = ?', email);
     if (existing) throw new HttpError(409, existing.google_sub && !existing.password_hash ? 'This email already has an account — use “Continue with Google”' : 'This email already has an account — sign in instead');
-    const user = this.createUser({ email, name: String(name || '').trim().slice(0, 80), password });
+    const user = this.createUser({ email, name: String(name || '').trim().slice(0, 80), password, status: this.instantAccess(email, accessCode && this.codeOk(accessCode)) ? 'active' : 'pending' });
+    if (user.status !== 'active') return { ...this.publicUser(user), pending: true };
     this.createSession(res, req, user, { remember });
     return this.publicUser(user);
   }
@@ -171,6 +255,8 @@ export class Auth {
     const user = this.db.get(null, 'SELECT * FROM users WHERE email = ?', email);
     if (user && !user.password_hash && user.google_sub) throw new HttpError(400, 'This account uses Google — click “Continue with Google”');
     if (!user || !this.verifyPassword(password, user.password_hash)) throw new HttpError(401, 'Wrong email or password');
+    const blocked = this.statusError(user);
+    if (blocked) throw blocked;
     this.createSession(res, req, user, { remember });
     return this.publicUser(user);
   }
@@ -208,6 +294,8 @@ export class Auth {
     this.db.run('UPDATE users SET password_hash = ? WHERE id = ?', this.hashPassword(password), userId);
     this.db.run('DELETE FROM sessions WHERE user_id = ?', userId); // sign out everywhere else
     const user = this.db.get(null, 'SELECT * FROM users WHERE id = ?', userId);
+    const blocked = this.statusError(user);
+    if (blocked) throw blocked;
     this.createSession(res, req, user, { remember: true });
     return this.publicUser(user);
   }
@@ -280,9 +368,12 @@ export class Auth {
       this.db.run('UPDATE users SET google_sub = ?, avatar = COALESCE(avatar, ?), name = COALESCE(name, ?) WHERE id = ?', claims.sub, claims.picture || null, claims.name || null, user.id);
       user = this.db.get(null, 'SELECT * FROM users WHERE id = ?', user.id);
     } else {
-      if (!st.code && !this.emailAllowlisted(email) && this.required) return fail('needs_code', 'signup', `&email=${encodeURIComponent(email)}`);
-      user = this.createUser({ email, name: claims.name, googleSub: claims.sub, avatar: claims.picture });
+      const hasUsers = !!this.db.scalar('SELECT COUNT(*) FROM users');
+      if (!hasUsers && this.required && !st.code && !this.emailAllowlisted(email)) return fail('needs_code', 'signup', `&email=${encodeURIComponent(email)}`);
+      user = this.createUser({ email, name: claims.name, googleSub: claims.sub, avatar: claims.picture, status: this.instantAccess(email, st.code) ? 'active' : 'pending' });
     }
+    if (user.status === 'pending') return { redirect: `/signin?pending=1&email=${encodeURIComponent(email)}` };
+    if (user.status === 'disabled') return fail('disabled');
     this.createSession(res, req, user, { remember: true });
     return { redirect: st.next || '/' };
   }

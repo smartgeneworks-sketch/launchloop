@@ -74,7 +74,9 @@ Everything lives in `/data/launchloop.db`. Snapshot the disk (Render and Fly bot
 ## Accounts and Google sign-in
 
 - People sign up at `/signup` with name, email and password, or with Google. Sessions last a year (HttpOnly, Secure cookie); `www.` redirects to the main address.
-- **Who can sign up:** anyone who has the team access code (`APP_API_TOKEN`), or whose email matches `SIGNUP_ALLOWED_EMAILS` (`you@company.com` or a whole domain like `@company.com`). Give teammates the code, or add their domain.
+- **The first account is the owner** and needs `APP_API_TOKEN` as the owner access code. Keep the token to yourself after that.
+- **Everyone else signs up freely and waits for approval.** New accounts appear on the **Team** page (owners and admins only, with a badge counting who's waiting). Approve or decline them there; you can also switch people off, remove them, or make them admins. With email set up, admins get an email for each new sign-up and people get an email when they're approved.
+- Emails matching `SIGNUP_ALLOWED_EMAILS` (`you@company.com` or a whole domain like `@company.com`) skip the approval step.
 - **Forgot password:** with email set up (`RESEND_API_KEY`, `NOTIFY_EMAIL_FROM`) a one-hour reset link is emailed. Without it, the reset page asks for the access code instead.
 - `APP_API_TOKEN` still works as `Authorization: Bearer …` for scripts.
 

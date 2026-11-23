@@ -109,6 +109,61 @@ async function ensureSession() {
   const s = await fetch('/api/session').then((r) => r.json());
   if (s.authRequired && !s.signedIn) return goSignIn();
   S.user = s.user;
+  S.isAdmin = s.authRequired && s.isAdmin;
+  setTeamBadge(s.pendingCount);
+  if (S.isAdmin && !S._teamPoll)
+    S._teamPoll = setInterval(async () => {
+      const r = await fetch('/api/session').then((x) => x.json()).catch(() => null);
+      if (r?.signedIn) setTeamBadge(r.pendingCount);
+    }, 60_000);
+}
+function setTeamBadge(n) {
+  const nav = $('#navTeam');
+  if (!nav) return;
+  nav.hidden = !S.isAdmin;
+  $('#teamCount').textContent = n ? String(n) : '';
+}
+
+// ------------------------------------------------------------------ team (admin portal)
+const ROLE_LABEL = { owner: 'Owner', admin: 'Admin', member: 'Member' };
+const STATUS_PILL = { pending: ['warn', 'Waiting for approval'], active: ['ok', 'Active'], disabled: ['bad', 'Switched off'] };
+async function loadTeam() {
+  const r = await api('GET', '/api/admin/users');
+  S.team = r;
+  setTeamBadge(r.users.filter((u) => u.status === 'pending').length);
+  if (route() === 'team') $('#view').innerHTML = viewTeam();
+}
+function viewTeam() {
+  if (!S.isAdmin) return '<div class="empty"><h2>Team</h2><p>Only owners and admins can manage the team.</p></div>';
+  if (!S.team) {
+    loadTeam().catch((e) => toast(e.message, 'bad'));
+    return '<h1 class="page">Team</h1><p class="page-sub">Loading…</p>';
+  }
+  const { users, me, myRole } = S.team;
+  const pending = users.filter((u) => u.status === 'pending');
+  const others = users.filter((u) => u.status !== 'pending');
+  const person = (u) => `<div class="tm-person">${u.avatar ? `<img src="${esc(u.avatar)}" alt="" referrerpolicy="no-referrer">` : `<span class="me-init">${esc(u.name[0].toUpperCase())}</span>`}<div><b>${esc(u.name)}${u.id === me ? ' <span class="muted small">(you)</span>' : ''}</b><div class="muted small">${esc(u.email)}</div></div></div>`;
+  const how = (u) => [u.google ? 'Google' : '', u.password ? 'Password' : ''].filter(Boolean).join(' + ');
+  const canTouch = (u) => u.id !== me && (u.role !== 'owner' || myRole === 'owner');
+  const roleSel = (u) =>
+    canTouch(u) && u.status !== 'pending'
+      ? `<select class="sm" data-team-role="${u.id}">${['member', 'admin', ...(myRole === 'owner' ? ['owner'] : [])].map((r) => `<option value="${r}" ${u.role === r ? 'selected' : ''}>${ROLE_LABEL[r]}</option>`).join('')}</select>`
+      : ROLE_LABEL[u.role];
+  const pill = (u) => `<span class="pill ${STATUS_PILL[u.status][0]}">${STATUS_PILL[u.status][1]}</span>`;
+  return `
+  <div class="spread"><div><div class="eyebrow">Admin</div><h1 class="page">Team</h1><p class="page-sub">Anyone can sign up at <b>${esc(location.host)}/signup</b>. New accounts wait here until an owner or admin approves them.</p></div>
+  <button class="btn ghost" data-action="copy-signup-link">Copy sign-up link</button></div>
+  ${pending.length ? `<div class="card" style="border-color:var(--warn);margin-bottom:18px"><h3 style="margin-top:0">Waiting for approval (${pending.length})</h3>
+    <table class="t"><thead><tr><th>Person</th><th>Signed up with</th><th>Signed up</th><th></th></tr></thead><tbody>
+    ${pending.map((u) => `<tr><td>${person(u)}</td><td>${how(u)}</td><td>${fmtDate(u.createdAt, { time: true })}</td><td class="num"><div class="row" style="justify-content:flex-end;gap:6px"><button class="btn signal sm" data-action="team" data-do="approve" data-id="${u.id}">Approve</button><button class="btn ghost sm" data-action="team" data-do="remove" data-id="${u.id}" data-confirm="Decline ${esc(u.email)}? Their sign-up is deleted; they can sign up again later.">Decline</button></div></td></tr>`).join('')}
+    </tbody></table></div>` : ''}
+  <div class="card"><h3 style="margin-top:0">Members (${others.length})</h3>
+    <table class="t"><thead><tr><th>Person</th><th>Role</th><th>Status</th><th>Signs in with</th><th>Last sign-in</th><th></th></tr></thead><tbody>
+    ${others.map((u) => `<tr><td>${person(u)}</td><td>${roleSel(u)}</td><td>${pill(u)}</td><td>${how(u)}</td><td>${u.lastLoginAt ? fmtDate(u.lastLoginAt, { time: true }) : '<span class="muted">Never</span>'}</td>
+      <td class="num">${canTouch(u) ? `<div class="row" style="justify-content:flex-end;gap:6px">${u.status === 'active' ? `<button class="btn ghost sm" data-action="team" data-do="disable" data-id="${u.id}" data-confirm="Switch off ${esc(u.email)}? They are signed out everywhere and can’t sign in until you switch them back on.">Switch off</button>` : `<button class="btn ghost sm" data-action="team" data-do="enable" data-id="${u.id}">Switch on</button>`}<button class="btn ghost sm" data-action="team" data-do="remove" data-id="${u.id}" data-confirm="Remove ${esc(u.email)} completely? Their account is deleted.">Remove</button></div>` : ''}</td></tr>`).join('')}
+    </tbody></table>
+    <p class="muted small" style="margin:14px 0 0"><b>Owner</b>: everything, including making other owners. <b>Admin</b>: everything, including approving people. <b>Member</b>: uses LaunchLoop but can’t manage the team.</p>
+  </div>`;
 }
 
 async function boot() {
@@ -192,10 +247,14 @@ function renderSelectors() {
 
 // ------------------------------------------------------------------ router
 const route = () => (location.hash.replace(/^#\/?/, '').split('?')[0] || 'dashboard');
-const VIEWS = { dashboard: viewDashboard, workspace: viewWorkspace, studio: viewStudio, review: viewReview, calendar: viewCalendar, timeline: viewTimeline, analytics: viewAnalytics };
+const VIEWS = { dashboard: viewDashboard, workspace: viewWorkspace, studio: viewStudio, review: viewReview, calendar: viewCalendar, timeline: viewTimeline, analytics: viewAnalytics, team: viewTeam };
 function render() {
   const r = VIEWS[route()] ? route() : 'dashboard';
   document.querySelectorAll('#nav a').forEach((a) => a.classList.toggle('active', a.dataset.route === r));
+  if (r === 'team') {
+    $('#view').innerHTML = viewTeam();
+    return;
+  }
   const scroll = window.scrollY;
   if (!S.ws) {
     $('#view').innerHTML = `<div class="empty"><h2>Create your first workspace</h2><p>Connect a product to start generating creatives.</p><button class="btn signal" data-action="new-workspace">+ New workspace</button></div>`;
@@ -1158,6 +1217,15 @@ const actions = {
   },
   async png(el) {
     await svgToPng(el.dataset.src, el.dataset.name);
+  },
+  async team(el) {
+    if (el.dataset.confirm && !confirm(el.dataset.confirm)) return;
+    await api('POST', `/api/admin/users/${el.dataset.id}`, { action: el.dataset.do });
+    toast({ approve: 'Approved — they can sign in now', remove: 'Removed', disable: 'Switched off', enable: 'Switched back on' }[el.dataset.do], 'ok');
+    await loadTeam();
+  },
+  'copy-signup-link'() {
+    navigator.clipboard.writeText(`${location.origin}/signup`).then(() => toast('Sign-up link copied', 'ok'));
   },
   async 'sign-out'() {
     await fetch('/api/auth/signout', { method: 'POST' });
@@ -2322,6 +2390,15 @@ document.addEventListener('click', async (e) => {
 });
 document.addEventListener('change', async (e) => {
   const el = e.target;
+  if (el.dataset.teamRole) {
+    try {
+      await api('POST', `/api/admin/users/${el.dataset.teamRole}`, { action: 'role', role: el.value });
+      toast(`Role changed to ${ROLE_LABEL[el.value]}`, 'ok');
+    } catch (err) {
+      toast(err.message, 'bad');
+    }
+    return loadTeam();
+  }
   if (el.id === 'wsSelect') {
     S.wsId = el.value;
     return loadWorkspace();

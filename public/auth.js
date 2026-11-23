@@ -15,7 +15,8 @@ const ERRORS = {
   google_failed: 'Google sign-in didn’t work. Please try again.',
   google_expired: 'That sign-in took too long. Please try again.',
   google_unverified: 'Your Google email isn’t verified yet.',
-  needs_code: 'To create a new account, enter your team access code below, then continue with Google again.',
+  needs_code: 'This is the first account, so it becomes the owner. Enter the access code below, then continue with Google again.',
+  disabled: 'This account has been switched off. Ask your LaunchLoop admin if you think this is a mistake.',
 };
 
 const G_LOGO = `<svg viewBox="0 0 48 48" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>`;
@@ -49,7 +50,7 @@ function render(cfg) {
   const err = ERRORS[params.get('error')] || '';
   const google = (label) => `<button type="button" class="gbtn" data-google>${G_LOGO}<span>${label}</span></button><div class="or">or</div>`;
   const codeField = cfg.signupNeedsCode
-    ? field('accessCode', 'Team access code', { type: 'password', auto: 'off', required: false, hint: 'Ask whoever runs LaunchLoop for it. Owner: it’s <code>APP_API_TOKEN</code> in Render → Environment.' })
+    ? field('accessCode', 'Owner access code', { type: 'password', auto: 'off', required: false, hint: 'This first account becomes the owner. Paste <code>APP_API_TOKEN</code> from Render → Environment.' })
     : '';
 
   if (mode === 'signin') {
@@ -57,7 +58,7 @@ function render(cfg) {
     card.innerHTML = `<h2>Welcome back</h2><p class="sub">Sign in to your LaunchLoop workspace.</p>
       ${google('Continue with Google')}
       <form novalidate>
-        <div class="alert bad" role="alert">${esc(err)}</div>
+        <div class="alert ${params.get('pending') ? 'info' : 'bad'}" role="alert">${params.get('pending') ? 'Thanks for signing up! An admin needs to approve your account before you can sign in. You’ll get an email when it’s approved.' : esc(err)}</div>
         ${field('email', 'Email', { type: 'email', auto: 'email', value: params.get('email') || '' })}
         ${field('password', 'Password', { type: 'password', auto: 'current-password', extra: `<a href="${withNext('/forgot-password')}">Forgot password?</a>` })}
         <label class="check"><input type="checkbox" name="remember" checked> Keep me signed in for a year</label>
@@ -66,7 +67,7 @@ function render(cfg) {
       <p class="switch">New to LaunchLoop? <a href="${withNext('/signup')}">Create an account</a></p>`;
   } else if (mode === 'signup') {
     document.title = 'Create account — LaunchLoop';
-    card.innerHTML = `<h2>Create your account</h2><p class="sub">${cfg.hasUsers ? 'Join your team’s LaunchLoop workspace.' : 'You’ll be the owner of this LaunchLoop.'}</p>
+    card.innerHTML = `<h2>Create your account</h2><p class="sub">${!cfg.hasUsers ? 'You’ll be the owner of this LaunchLoop.' : cfg.approvalRequired ? 'Join your team’s LaunchLoop. An admin approves new accounts before first sign-in.' : 'Join your team’s LaunchLoop workspace.'}</p>
       ${google('Sign up with Google')}
       <form novalidate>
         <div class="alert ${params.get('error') === 'needs_code' ? 'info' : 'bad'}" role="alert">${esc(err)}</div>
@@ -137,7 +138,7 @@ function wire(cfg) {
   $('[data-google]')?.addEventListener('click', async () => {
     const code = form.elements.accessCode?.value?.trim();
     try {
-      if (mode === 'signup') await post('/api/auth/google/prepare', { accessCode: code || '' });
+      if (mode === 'signup' && form.elements.accessCode) await post('/api/auth/google/prepare', { accessCode: code || '' });
       location.href = `/api/auth/google/start?mode=${mode === 'signup' ? 'signup' : 'signin'}&next=${encodeURIComponent(next)}`;
     } catch (e) {
       setErr('accessCode', e.message);
@@ -180,7 +181,15 @@ function wire(cfg) {
     const f = Object.fromEntries(new FormData(form));
     try {
       if (mode === 'signin') await post('/api/auth/signin', { email: f.email, password: f.password, remember: !!f.remember });
-      else if (mode === 'signup') await post('/api/auth/signup', { name: f.name, email: f.email, password: f.password, accessCode: f.accessCode, remember: true });
+      else if (mode === 'signup') {
+        const r = await post('/api/auth/signup', { name: f.name, email: f.email, password: f.password, accessCode: f.accessCode, remember: true });
+        if (r.user?.pending) {
+          $('#card').innerHTML = `<div class="done"><div class="done-ico">✓</div><h2>You’re on the list</h2>
+            <p class="sub">Thanks, ${esc(r.user.name)}. Your account is waiting for an admin to approve it.${cfg.emailReset ? ` We’ll email <b>${esc(r.user.email)}</b> as soon as you’re approved.` : ' Let your LaunchLoop admin know you’ve signed up.'}</p>
+            <a class="btn btn-link" href="/signin?email=${encodeURIComponent(r.user.email)}">Back to sign in</a></div>`;
+          return;
+        }
+      }
       else if (mode === 'reset') await post('/api/auth/reset', { token: params.get('token'), password: f.password });
       else if (cfg.emailReset) {
         await post('/api/auth/forgot', { email: f.email });
